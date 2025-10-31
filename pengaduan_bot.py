@@ -3,6 +3,7 @@ import json
 import gspread
 import logging
 import pytz
+import asyncio
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -52,7 +53,7 @@ def generate_ticket_number():
         return f"JB-{datetime.now(JAKARTA_TZ).strftime('%Y%m%d')}-001"
 
 def escape_markdown(text):
-    """Escape karakter khusus Markdown"""
+    """Escape karakter khusus MarkdownV2"""
     if not text:
         return ""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
@@ -69,13 +70,31 @@ def cancel_keyboard():
         ['❌ Batalkan']
     ], resize_keyboard=True)
 
-# ===== IMPROVED STATE MANAGEMENT =====
+# ===== IMPROVED STATE MANAGEMENT WITH USER LOCK =====
+# Dictionary untuk menyimpan state setiap user
+user_states = {}
+
+def get_user_state(user_id):
+    """Dapatkan state user dengan default values"""
+    if user_id not in user_states:
+        user_states[user_id] = {
+            "mode": None,
+            "step": None,
+            "data": {}
+        }
+    return user_states[user_id]
+
+def clear_user_state(user_id):
+    """Clear state user"""
+    if user_id in user_states:
+        del user_states[user_id]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command - reset semua state dan tampilkan menu"""
     user_id = update.message.from_user.id
     
     # Reset semua state user
-    context.user_data.clear()
+    clear_user_state(user_id)
     
     await update.message.reply_text(
         "🤖 **Selamat datang di Layanan Pengaduan JokerBola**\n\n"
@@ -89,9 +108,10 @@ async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.message.from_user.id
     
     # Reset state dan mulai fresh
-    context.user_data.clear()
-    context.user_data["mode"] = "pengaduan"
-    context.user_data["step"] = "nama"
+    clear_user_state(user_id)
+    user_state = get_user_state(user_id)
+    user_state["mode"] = "pengaduan"
+    user_state["step"] = "nama"
     
     await update.message.reply_text(
         "📝 **Membuat Pengaduan Baru**\n\n"
@@ -106,9 +126,10 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     # Reset state dan mulai fresh
-    context.user_data.clear()
-    context.user_data["mode"] = "cek_status"
-    context.user_data["step"] = "input_tiket"
+    clear_user_state(user_id)
+    user_state = get_user_state(user_id)
+    user_state["mode"] = "cek_status"
+    user_state["step"] = "input_tiket"
     
     await update.message.reply_text(
         "🔍 **Cek Status Tiket**\n\n"
@@ -144,7 +165,7 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle cancel dari button"""
     user_id = update.message.from_user.id
-    context.user_data.clear()
+    clear_user_state(user_id)
     
     await update.message.reply_text(
         "❌ **Proses dibatalkan**\n\n"
@@ -158,7 +179,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text.strip()
     user_id = update.message.from_user.id
     
-    logger.info(f"User {user_id} message: {user_message}, state: {context.user_data}")
+    user_state = get_user_state(user_id)
+    logger.info(f"User {user_id} message: {user_message}, state: {user_state}")
     
     # Handle cancel command
     if user_message == "❌ Batalkan":
@@ -166,7 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Handle menu commands ketika tidak dalam state
-    if "mode" not in context.user_data:
+    if not user_state["mode"]:
         if user_message == "📝 Buat Pengaduan":
             await handle_buat_pengaduan(update, context)
             return
@@ -181,32 +203,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_menu(update, context)
             return
     
-    mode = context.user_data["mode"]
-    step = context.user_data.get("step", "")
+    mode = user_state["mode"]
+    step = user_state.get("step", "")
     
     # PROSES BUAT PENGADUAN
     if mode == "pengaduan":
-        await handle_pengaduan_flow(update, context, user_message)
+        await handle_pengaduan_flow(update, context, user_message, user_state)
     
     # PROSES CEK STATUS
     elif mode == "cek_status" and step == "input_tiket":
-        await proses_cek_status(update, context, user_message)
+        await proses_cek_status(update, context, user_message, user_state)
     
     else:
         # Jika state tidak jelas, reset ke menu
-        logger.warning(f"Unknown state: {context.user_data}")
-        context.user_data.clear()
+        logger.warning(f"Unknown state for user {user_id}: {user_state}")
+        clear_user_state(user_id)
         await show_menu(update, context)
 
-async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str):
+async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_state: dict):
     """Handle flow pengaduan yang lebih robust"""
-    step = context.user_data.get("step", "")
+    step = user_state.get("step", "")
     
     if step == "nama":
-        context.user_data["nama"] = user_message
-        context.user_data["user_id"] = update.message.from_user.id
-        context.user_data["username_tg"] = update.message.from_user.username or "-"
-        context.user_data["step"] = "username_jb"
+        user_state["data"]["nama"] = user_message
+        user_state["data"]["user_id"] = update.message.from_user.id
+        user_state["data"]["username_tg"] = update.message.from_user.username or "-"
+        user_state["step"] = "username_jb"
         
         await update.message.reply_text(
             "🆔 **Masukkan Username / ID JokerBola Anda:**\n\n"
@@ -216,8 +238,8 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif step == "username_jb":
-        context.user_data["username_jb"] = user_message
-        context.user_data["step"] = "keluhan"
+        user_state["data"]["username_jb"] = user_message
+        user_state["step"] = "keluhan"
         
         await update.message.reply_text(
             "📋 **Jelaskan keluhan Anda:**\n\n"
@@ -227,8 +249,8 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif step == "keluhan":
-        context.user_data["keluhan"] = user_message
-        context.user_data["step"] = "bukti"
+        user_state["data"]["keluhan"] = user_message
+        user_state["step"] = "bukti"
         
         await update.message.reply_text(
             "📸 **Kirim foto bukti (opsional)**\n\n"
@@ -239,8 +261,8 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif step == "bukti" and user_message.lower() == "lanjut":
-        context.user_data["bukti"] = "Tidak ada"
-        await selesaikan_pengaduan(update, context)
+        user_state["data"]["bukti"] = "Tidak ada"
+        await selesaikan_pengaduan(update, context, user_state)
         
     elif step == "bukti":
         # Jika di step bukti tapi bukan 'lanjut', minta konfirmasi
@@ -256,38 +278,40 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo untuk bukti"""
     user_id = update.message.from_user.id
+    user_state = get_user_state(user_id)
     
-    mode = context.user_data.get("mode")
-    step = context.user_data.get("step")
+    mode = user_state.get("mode")
+    step = user_state.get("step")
     
     if mode == "pengaduan" and step == "bukti":
         # Simpan photo
         file_id = update.message.photo[-1].file_id
         file_obj = await context.bot.get_file(file_id)
-        context.user_data["bukti"] = file_obj.file_path
+        user_state["data"]["bukti"] = file_obj.file_path
         
         await update.message.reply_text(
             "Sedang menyimpan pengaduan...",
             parse_mode="Markdown"
         )
         
-        await selesaikan_pengaduan(update, context)
+        await selesaikan_pengaduan(update, context, user_state)
     else:
         await update.message.reply_text(
             "❌ Foto tidak diperlukan saat ini.",
             reply_markup=main_menu_keyboard()
         )
 
-async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE, user_state: dict):
     """Selesaikan pengaduan dan simpan ke Google Sheets"""
-    data = context.user_data
+    user_id = update.message.from_user.id
+    data = user_state["data"]
     timestamp = get_jakarta_time()
     ticket_id = generate_ticket_number()
     
-    logger.info(f"Processing new complaint: {ticket_id}")
+    logger.info(f"Processing new complaint from user {user_id}: {ticket_id}")
     
     try:
-        # Save to Google Sheets
+        # Save to Google Sheets dengan error handling
         worksheet.append_row([
             timestamp,
             ticket_id,
@@ -306,7 +330,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
             "❌ Maaf, terjadi gangguan sistem. Silakan coba lagi nanti.",
             reply_markup=main_menu_keyboard()
         )
-        context.user_data.clear()
+        clear_user_state(user_id)
         return
 
     # Confirm to user
@@ -324,13 +348,83 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=main_menu_keyboard()
     )
 
-    # Notify admin - FIXED VERSION WITH MARKDOWN ESCAPING
-    await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
+    # Notify admin dengan retry mechanism
+    await kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id)
     
     # Clear user data - BISA BUAT PENGADUAN LAGI
-    context.user_data.clear()
+    clear_user_state(user_id)
 
-async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str):
+async def kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id, retry_count=3):
+    """Kirim notifikasi ke admin dengan retry mechanism"""
+    for attempt in range(retry_count):
+        try:
+            success = await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
+            if success:
+                logger.info(f"✅ Notifications sent successfully for ticket {ticket_id}")
+                return
+            else:
+                logger.warning(f"⚠️ Some notifications failed for ticket {ticket_id}, attempt {attempt + 1}")
+        except Exception as e:
+            logger.error(f"❌ Error sending notifications for ticket {ticket_id}, attempt {attempt + 1}: {e}")
+        
+        if attempt < retry_count - 1:
+            await asyncio.sleep(2)  # Tunggu 2 detik sebelum retry
+    
+    logger.error(f"❌ All notification attempts failed for ticket {ticket_id}")
+
+async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
+    """Send notification to admin - FIXED VERSION"""
+    try:
+        # Escape semua data user untuk menghindari Markdown error
+        nama_escaped = escape_markdown(data.get("nama", ""))
+        username_jb_escaped = escape_markdown(data.get("username_jb", ""))
+        keluhan_escaped = escape_markdown(data.get("keluhan", ""))
+        username_tg_escaped = escape_markdown(data.get("username_tg", ""))
+        user_id_escaped = escape_markdown(data.get("user_id", ""))
+        
+        bukti_text = data.get("bukti", "Tidak ada")
+        if bukti_text != "Tidak ada" and bukti_text.startswith("http"):
+            bukti_display = f"[📎 Lihat Bukti]({bukti_text})"
+        else:
+            bukti_display = escape_markdown(bukti_text)
+        
+        # Buat message yang sederhana dan aman
+        message = (
+            f"🚨 *PENGADUAN BARU DITERIMA* 🚨\\n\\n"
+            f"🎫 *Ticket ID:* `{ticket_id}`\\n"
+            f"⏰ *Waktu:* {timestamp} \\(WIB\\)\\n\\n"
+            f"*Data Pelapor:*\\n"
+            f"• *Nama:* {nama_escaped}\\n"
+            f"• *Username JB:* {username_jb_escaped}\\n"
+            f"• *Telegram:* @{username_tg_escaped}\\n"
+            f"• *User ID:* `{user_id_escaped}`\\n\\n"
+            f"*Keluhan:*\\n{keluhan_escaped}\\n\\n"
+            f"*Bukti:* {bukti_display}\\n\\n"
+            f"⚠️ *Segera tindak lanjuti pengaduan ini\\!*"
+        )
+        
+        success_count = 0
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=message,
+                    parse_mode="MarkdownV2",
+                    disable_web_page_preview=True
+                )
+                success_count += 1
+                logger.info(f"✅ Notification sent to admin {admin_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send to admin {admin_id}: {e}")
+        
+        logger.info(f"📊 Notifications sent to {success_count}/{len(ADMIN_IDS)} admins")
+        return success_count > 0
+        
+    except Exception as e:
+        logger.error(f"❌ Error in kirim_notifikasi_admin: {e}")
+        return False
+
+async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_state: dict):
     """Proses cek status tiket"""
     current_user_id = update.message.from_user.id
     
@@ -414,56 +508,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
     
     # Clear user data - BISA CEK LAGI
-    context.user_data.clear()
-
-async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
-    """Send notification to admin - FIXED VERSION WITH MARKDOWN ESCAPING"""
-    try:
-        # Escape semua data user untuk menghindari Markdown error
-        nama_escaped = escape_markdown(data.get("nama", ""))
-        username_jb_escaped = escape_markdown(data.get("username_jb", ""))
-        keluhan_escaped = escape_markdown(data.get("keluhan", ""))
-        username_tg_escaped = escape_markdown(data.get("username_tg", ""))
-        user_id_escaped = escape_markdown(data.get("user_id", ""))
-        
-        bukti_text = data.get("bukti", "Tidak ada")
-        if bukti_text != "Tidak ada" and bukti_text.startswith("http"):
-            bukti_display = f"[📎 Lihat Bukti]({bukti_text})"
-        else:
-            bukti_display = escape_markdown(bukti_text)
-        
-        message = (
-            f"🚨 **PENGADUAN BARU DITERIMA** 🚨\n\n"
-            f"🎫 **Ticket ID:** `{ticket_id}`\n"
-            f"⏰ **Waktu:** {timestamp} \\(WIB\\)\n\n"
-            f"**📋 Data Pelapor:**\n"
-            f"• **Nama:** {nama_escaped}\n"
-            f"• **Username JB:** {username_jb_escaped}\n"
-            f"• **Telegram:** @{username_tg_escaped}\n"
-            f"• **User ID:** `{user_id_escaped}`\n\n"
-            f"**📝 Keluhan:**\n{keluhan_escaped}\n\n"
-            f"**📎 Bukti:** {bukti_display}\n\n"
-            f"⚠️ **Segera tindak lanjuti pengaduan ini\\!**"
-        )
-        
-        success_count = 0
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=message,
-                    parse_mode="MarkdownV2",
-                    disable_web_page_preview=True
-                )
-                success_count += 1
-                logger.info(f"✅ Notification sent to admin {admin_id}")
-            except Exception as e:
-                logger.error(f"❌ Failed to send to admin {admin_id}: {e}")
-        
-        logger.info(f"📊 Notifications sent to {success_count}/{len(ADMIN_IDS)} admins")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in kirim_notifikasi_admin: {e}")
+    clear_user_state(current_user_id)
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Tampilkan menu utama"""
@@ -476,7 +521,9 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel command"""
-    context.user_data.clear()
+    user_id = update.message.from_user.id
+    clear_user_state(user_id)
+    
     await update.message.reply_text(
         "❌ **Semua proses dibatalkan**\n\n"
         "Kembali ke menu utama.",
@@ -532,7 +579,7 @@ def main():
         application.add_error_handler(error_handler)
         
         # Start bot
-        logger.info("✅ Bot starting dengan timezone Jakarta...")
+        logger.info("✅ Bot starting dengan improved state management...")
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
