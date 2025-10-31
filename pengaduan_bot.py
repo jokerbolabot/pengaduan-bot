@@ -2,11 +2,12 @@ import os
 import json
 import gspread
 import logging
+import pytz
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ContextTypes,
-    filters, ConversationHandler
+    filters
 )
 
 # Setup logging
@@ -22,6 +23,9 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_NAME = "Pengaduan JokerBola"
 ADMIN_IDS = [5704050846, 8388423519]
 
+# Timezone Jakarta
+JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
+
 # Setup Google Sheets
 try:
     gc = gspread.service_account_from_dict(json.loads(GOOGLE_CREDENTIALS_JSON))
@@ -33,133 +37,199 @@ except Exception as e:
     worksheet = None
 
 # Helper functions
+def get_jakarta_time():
+    """Dapatkan waktu Jakarta sekarang"""
+    return datetime.now(JAKARTA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
 def generate_ticket_number():
     try:
         all_data = worksheet.get_all_records()
-        today = datetime.now().strftime("%Y%m%d")
-        count_today = sum(1 for row in all_data if str(row.get('Timestamp', '')).startswith(datetime.now().strftime("%Y-%m-%d")))
+        today = datetime.now(JAKARTA_TZ).strftime("%Y%m%d")
+        count_today = sum(1 for row in all_data if str(row.get('Timestamp', '')).startswith(datetime.now(JAKARTA_TZ).strftime("%Y-%m-%d")))
         return f"JB-{today}-{count_today+1:03d}"
     except Exception as e:
         logger.error(f"Error generating ticket: {e}")
-        return f"JB-{datetime.now().strftime('%Y%m%d')}-001"
+        return f"JB-{datetime.now(JAKARTA_TZ).strftime('%Y%m%d')}-001"
 
 def main_menu_keyboard():
     return ReplyKeyboardMarkup([
-        ['Buat Pengaduan', 'Cek Status'],
-        ['Bantuan']
+        ['📝 Buat Pengaduan', '🔍 Cek Status'],
+        ['ℹ️ Bantuan']
     ], resize_keyboard=True)
 
-# ===== SIMPLE HANDLERS (TANPA CONVERSATION COMPLEX) =====
+def cancel_keyboard():
+    return ReplyKeyboardMarkup([
+        ['❌ Batalkan']
+    ], resize_keyboard=True)
+
+# ===== SIMPLE STATE MANAGEMENT =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command dengan menu sederhana"""
+    """Start command - reset semua state dan tampilkan menu"""
+    user_id = update.message.from_user.id
+    
+    # Reset semua state user
+    context.user_data.clear()
+    
     await update.message.reply_text(
-        "🤖 **Selamat datang di Layanan Pengaduan JokerBola**\n\n"
-        "Silakan pilih menu di bawah:",
+        f"🤖 **Selamat datang di Layanan Pengaduan JokerBola**\n\n"
+        f"Silakan pilih menu di bawah:",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memulai pengaduan baru - SIMPLE VERSION"""
+    """Memulai pengaduan baru"""
+    user_id = update.message.from_user.id
+    
+    # Reset state dan mulai fresh
     context.user_data.clear()
-    context.user_data["waiting_for"] = "nama"
+    context.user_data["mode"] = "pengaduan"
+    context.user_data["step"] = "nama"
     
     await update.message.reply_text(
-        "👋 **Membuat Pengaduan Baru**\n\n"
-        "Silakan kirim **Nama Lengkap** Anda:",
+        "📝 **Membuat Pengaduan Baru**\n\n"
+        "Silakan kirim **Nama Lengkap** Anda:\n\n"
+        "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=cancel_keyboard()
     )
 
 async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cek status tiket - SIMPLE VERSION"""
-    context.user_data["waiting_for"] = "cek_tiket"
+    """Cek status tiket"""
+    user_id = update.message.from_user.id
+    
+    # Reset state dan mulai fresh
+    context.user_data.clear()
+    context.user_data["mode"] = "cek_status"
+    context.user_data["step"] = "input_tiket"
     
     await update.message.reply_text(
         "🔍 **Cek Status Tiket**\n\n"
         "Silakan kirim **Nomor Tiket** Anda:\n"
-        "Contoh: JB-20241219-001",
+        "Contoh: `JB-20241219-001`\n\n"
+        "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=cancel_keyboard()
     )
 
 async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menu bantuan"""
     await update.message.reply_text(
-        "🆘 **Bantuan Penggunaan**\n\n"
+        "ℹ️ **Bantuan Penggunaan**\n\n"
         "📝 **Cara Buat Pengaduan:**\n"
-        "1. Klik 'Buat Pengaduan'\n"
+        "1. Klik '📝 Buat Pengaduan'\n"
         "2. Isi nama lengkap\n"
         "3. Isi username JokerBola\n"
         "4. Jelaskan keluhan\n"
         "5. Kirim bukti (opsional)\n\n"
         "🔍 **Cek Status:**\n"
-        "1. Klik 'Cek Status'\n"
+        "1. Klik '🔍 Cek Status'\n"
         "2. Masukkan nomor tiket\n\n"
-        "❓ **Butuh bantuan lebih?** Hubungi Admin.",
+        "💡 **Tips:**\n"
+        "• Simpan nomor tiket dengan baik\n"
+        "• Bisa buat pengaduan berkali-kali\n"
+        "• Setiap pengaduan punya nomor unik\n\n"
+        "❌ **Batalkan proses kapan saja** dengan klik '❌ Batalkan'",
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard()
+    )
+
+async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cancel dari button"""
+    user_id = update.message.from_user.id
+    context.user_data.clear()
+    
+    await update.message.reply_text(
+        "❌ **Proses dibatalkan**\n\n"
+        "Kembali ke menu utama.",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle semua pesan text"""
-    user_message = update.message.text
-    waiting_for = context.user_data.get("waiting_for")
+    user_message = update.message.text.strip()
+    user_id = update.message.from_user.id
     
-    # Jika tidak dalam proses apapun, tampilkan menu
-    if not waiting_for:
+    # Handle cancel command
+    if user_message == "❌ Batalkan":
+        await handle_cancel(update, context)
+        return
+    
+    # Jika tidak dalam mode apapun, tampilkan menu
+    if "mode" not in context.user_data:
         await show_menu(update, context)
         return
     
+    mode = context.user_data["mode"]
+    step = context.user_data.get("step", "")
+    
     # PROSES BUAT PENGADUAN
-    if waiting_for == "nama":
-        context.user_data["nama"] = user_message
-        context.user_data["user_id"] = update.message.from_user.id
-        context.user_data["username_tg"] = update.message.from_user.username or "-"
-        context.user_data["waiting_for"] = "username_jb"
-        
-        await update.message.reply_text(
-            "🆔 **Masukkan Username / ID JokerBola Anda:**",
-            parse_mode="Markdown"
-        )
-        
-    elif waiting_for == "username_jb":
-        context.user_data["username_jb"] = user_message
-        context.user_data["waiting_for"] = "keluhan"
-        
-        await update.message.reply_text(
-            "📋 **Jelaskan keluhan Anda:**",
-            parse_mode="Markdown"
-        )
-        
-    elif waiting_for == "keluhan":
-        context.user_data["keluhan"] = user_message
-        context.user_data["waiting_for"] = "bukti"
-        
-        await update.message.reply_text(
-            "📸 **Kirim foto bukti (opsional)**\n\n"
-            "Kirim foto sekarang atau ketik 'lanjut' untuk melanjutkan tanpa bukti:",
-            parse_mode="Markdown"
-        )
-        
-    elif waiting_for == "bukti" and user_message.lower() == "lanjut":
-        context.user_data["bukti"] = "Tidak ada"
-        await selesaikan_pengaduan(update, context)
-        
+    if mode == "pengaduan":
+        if step == "nama":
+            context.user_data["nama"] = user_message
+            context.user_data["user_id"] = user_id
+            context.user_data["username_tg"] = update.message.from_user.username or "-"
+            context.user_data["step"] = "username_jb"
+            
+            await update.message.reply_text(
+                "🆔 **Masukkan Username / ID JokerBola Anda:**\n\n"
+                "Ketik ❌ Batalkan untuk membatalkan",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard()
+            )
+            
+        elif step == "username_jb":
+            context.user_data["username_jb"] = user_message
+            context.user_data["step"] = "keluhan"
+            
+            await update.message.reply_text(
+                "📋 **Jelaskan keluhan Anda:**\n\n"
+                "Ketik ❌ Batalkan untuk membatalkan",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard()
+            )
+            
+        elif step == "keluhan":
+            context.user_data["keluhan"] = user_message
+            context.user_data["step"] = "bukti"
+            
+            await update.message.reply_text(
+                "📸 **Kirim foto bukti (opsional)**\n\n"
+                "Kirim foto sekarang atau ketik 'lanjut' untuk melanjutkan tanpa bukti.\n\n"
+                "Ketik ❌ Batalkan untuk membatalkan",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard()
+            )
+            
+        elif step == "bukti" and user_message.lower() == "lanjut":
+            context.user_data["bukti"] = "Tidak ada"
+            await selesaikan_pengaduan(update, context)
+        else:
+            # Jika input tidak dikenali di step bukti
+            await update.message.reply_text(
+                "❌ Perintah tidak dikenali. Kirim foto bukti atau ketik 'lanjut' untuk melanjutkan tanpa bukti.",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard()
+            )
+    
     # PROSES CEK STATUS
-    elif waiting_for == "cek_tiket":
+    elif mode == "cek_status" and step == "input_tiket":
         await proses_cek_status(update, context, user_message)
-        
+    
     else:
-        # Jika tidak ada yang match, reset ke menu
+        # Jika state tidak jelas, reset ke menu
         context.user_data.clear()
         await show_menu(update, context)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo untuk bukti"""
-    waiting_for = context.user_data.get("waiting_for")
+    user_id = update.message.from_user.id
     
-    if waiting_for == "bukti":
+    mode = context.user_data.get("mode")
+    step = context.user_data.get("step")
+    
+    if mode == "pengaduan" and step == "bukti":
         # Simpan photo
         file_id = update.message.photo[-1].file_id
         file_obj = await context.bot.get_file(file_id)
@@ -175,7 +245,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Selesaikan pengaduan dan simpan ke Google Sheets"""
     data = context.user_data
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = get_jakarta_time()  # Pakai waktu Jakarta
     ticket_id = generate_ticket_number()
     
     logger.info(f"Processing new complaint: {ticket_id}")
@@ -208,9 +278,11 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         f"✅ **Terima kasih, {data['nama']}!**\n\n"
         f"Laporan Anda telah diterima.\n\n"
         f"**Nomor Tiket:** `{ticket_id}`\n"
-        f"**Status:** Sedang diproses\n\n"
-        f"**Simpan nomor tiket ini!**\n"
-        f"Gunakan menu 'Cek Status' untuk memantau perkembangan.",
+        f"**Status:** Sedang diproses\n"
+        f"**Waktu:** {timestamp}\n\n"
+        f"**💡 Simpan nomor tiket ini!**\n"
+        f"Bisa buat pengaduan lagi kapan saja.\n"
+        f"Gunakan menu '🔍 Cek Status' untuk memantau.",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
@@ -218,7 +290,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     # Notify admin
     await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
     
-    # Clear user data
+    # Clear user data - BISA BUAT PENGADUAN LAGI
     context.user_data.clear()
 
 async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str):
@@ -232,7 +304,8 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "Format: `JB-TANGGAL-NOMOR`\n"
             "Contoh: `JB-20241219-001`\n\n"
             "Silakan masukkan kembali:",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard()
         )
         return
     
@@ -285,7 +358,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 "• Nomor tiket benar\n"
                 "• Format sesuai\n"
                 "• Tidak ada typo\n\n"
-                "Klik 'Cek Status' untuk mencoba lagi.",
+                "Klik '🔍 Cek Status' untuk mencoba lagi.",
                 parse_mode="Markdown",
                 reply_markup=main_menu_keyboard()
             )
@@ -297,7 +370,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             reply_markup=main_menu_keyboard()
         )
     
-    # Clear user data
+    # Clear user data - BISA CEK LAGI
     context.user_data.clear()
 
 async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
@@ -308,7 +381,7 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
         message = (
             f"📩 **PENGADUAN BARU**\n\n"
             f"🎫 **Ticket ID:** {ticket_id}\n"
-            f"⏰ **Waktu:** {timestamp}\n\n"
+            f"⏰ **Waktu:** {timestamp} (WIB)\n\n"
             f"👤 **Nama:** {data['nama']}\n"
             f"🆔 **Username JB:** {data['username_jb']}\n"
             f"💬 **Keluhan:** {data['keluhan']}\n"
@@ -340,11 +413,13 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel command"""
     context.user_data.clear()
     await update.message.reply_text(
-        "❌ Proses dibatalkan.",
+        "❌ **Semua proses dibatalkan**\n\n"
+        "Kembali ke menu utama.",
+        parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
@@ -377,13 +452,14 @@ def main():
         
         # Command handlers
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("cancel", cancel))
+        application.add_handler(CommandHandler("cancel", cancel_command))
         application.add_handler(CommandHandler("help", handle_bantuan))
         
-        # Message handlers untuk menu
-        application.add_handler(MessageHandler(filters.Text(["Buat Pengaduan"]), handle_buat_pengaduan))
-        application.add_handler(MessageHandler(filters.Text(["Cek Status"]), handle_cek_status))
-        application.add_handler(MessageHandler(filters.Text(["Bantuan"]), handle_bantuan))
+        # Message handlers untuk menu button
+        application.add_handler(MessageHandler(filters.Text(["📝 Buat Pengaduan"]), handle_buat_pengaduan))
+        application.add_handler(MessageHandler(filters.Text(["🔍 Cek Status"]), handle_cek_status))
+        application.add_handler(MessageHandler(filters.Text(["ℹ️ Bantuan"]), handle_bantuan))
+        application.add_handler(MessageHandler(filters.Text(["❌ Batalkan"]), handle_cancel))
         
         # Handler untuk photo
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -395,8 +471,11 @@ def main():
         application.add_error_handler(error_handler)
         
         # Start bot
-        logger.info("✅ Bot starting...")
-        application.run_polling(drop_pending_updates=True)
+        logger.info("✅ Bot starting dengan timezone Jakarta...")
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
         
     except Exception as e:
         logger.error(f"Fatal error: {e}")
