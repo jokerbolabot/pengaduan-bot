@@ -59,8 +59,7 @@ def generate_ticket_number(website_code):
         
         # Hitung tiket hari ini untuk website tertentu
         count_today = sum(1 for row in all_data 
-                         if str(row.get('Ticket ID', '')).startswith(f"{website_code}-{today}")
-                         and row.get('Nama Website', '').lower() == WEBSITES.get(website_code.lower(), {}).get('name', '').lower())
+                         if str(row.get('Ticket ID', '')).startswith(f"{website_code}-{today}"))
         
         return f"{website_code}-{today}-{count_today+1:03d}"
     except Exception as e:
@@ -93,6 +92,7 @@ def cancel_keyboard():
 
 # ===== STATE MANAGEMENT =====
 user_states = {}
+user_website_history = {}  # Untuk melacak website yang pernah digunakan user
 
 def get_user_state(user_id):
     """Dapatkan state user dengan default values"""
@@ -108,6 +108,17 @@ def clear_user_state(user_id):
     """Clear state user"""
     if user_id in user_states:
         del user_states[user_id]
+
+def update_user_website_history(user_id, website_name):
+    """Update history website user dan clear state jika website berbeda"""
+    if user_id in user_website_history:
+        previous_website = user_website_history[user_id]
+        if previous_website != website_name:
+            # Website berbeda, clear state untuk mulai fresh
+            clear_user_state(user_id)
+            logger.info(f"🔄 Cleared state for user {user_id} due to website change: {previous_website} -> {website_name}")
+    
+    user_website_history[user_id] = website_name
 
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,9 +158,22 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state["mode"] = "cek_status"
     user_state["step"] = "input_tiket"
     
+    # Berikan contoh tiket berdasarkan website history user jika ada
+    example_ticket = ""
+    if user_id in user_website_history:
+        website_name = user_website_history[user_id]
+        website_code = None
+        for key, info in WEBSITES.items():
+            if info['name'] == website_name:
+                website_code = info['code']
+                break
+        
+        if website_code:
+            example_ticket = f"\n<b>Contoh:</b> <code>{website_code}-31102025-001</code>"
+    
     await update.message.reply_text(
-        "🔍 <b>Cek Status Tiket</b>\n\n"
-        "Silakan kirim <b>Nomor Tiket</b> Anda:\n\n"
+        f"🔍 <b>Cek Status Tiket</b>\n\n"
+        f"Silakan kirim <b>Nomor Tiket</b> Anda:{example_ticket}\n\n"
         "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="HTML",
         reply_markup=cancel_keyboard()
@@ -230,6 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_state: dict):
     """Handle flow pengaduan yang lebih robust"""
     step = user_state.get("step", "")
+    user_id = update.message.from_user.id
     
     if step == "nama_website":
         # Cari website berdasarkan input user (case insensitive)
@@ -243,12 +268,15 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
                 break
         
         if website_found:
+            # Update website history dan clear state jika website berbeda
+            update_user_website_history(user_id, website_found)
+            
             user_state["data"]["website_name"] = website_found
             user_state["data"]["website_code"] = website_code
             user_state["step"] = "nama"
             
             await update.message.reply_text(
-                f"<b>{website_found}</b>\n\n"
+                f"✅ <b>{website_found}</b>\n\n"
                 "Silakan kirim <b>Nama Lengkap</b> Anda:\n\n"
                 "Ketik ❌ Batalkan untuk membatalkan",
                 parse_mode="HTML",
@@ -468,13 +496,14 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
         return False
 
 async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_state: dict):
-    """Proses cek status tiket - DITAMBAHKAN NAMA WEBSITE"""
+    """Proses cek status tiket - DIPERBAIKI UNTUK WEBSITE"""
     current_user_id = update.message.from_user.id
     
     try:
         all_data = worksheet.get_all_records()
         found = False
         user_owns_ticket = False
+        ticket_data = None
         
         for row in all_data:
             if row.get('Ticket ID') == ticket_id:
@@ -482,41 +511,42 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 ticket_user_id = row.get('User_ID')
                 if str(ticket_user_id) == str(current_user_id):
                     user_owns_ticket = True
-                    
-                    status = row.get('Status', 'Tidak diketahui')
-                    status_emoji = {
-                        'Sedang diproses': '🟡',
-                        'Selesai': '✅',
-                        'Ditolak': '❌',
-                        'Menunggu konfirmasi': '🟠'
-                    }.get(status, '⚪')
-                    
-                    nama_escaped = escape_html(row.get('Nama', 'Tidak ada'))
-                    username_escaped = escape_html(row.get('Username Website', 'Tidak ada'))
-                    keluhan_escaped = escape_html(row.get('Keluhan', 'Tidak ada'))
-                    timestamp_escaped = escape_html(row.get('Timestamp', 'Tidak ada'))
-                    website_escaped = escape_html(row.get('Nama Website', 'Tidak ada'))  # INI YANG DITAMBAHKAN
-                    
-                    status_message = (
-                        f"📋 <b>STATUS PENGADUAN</b>\n\n"
-                        f"{status_emoji} <b>Status:</b> <b>{status}</b>\n"
-                        f"🎫 <b>Ticket ID:</b> <code>{ticket_id}</code>\n"
-                        f"🌐 <b>Website:</b> {website_escaped}\n"  # INI YANG DITAMBAHKAN
-                        f"👤 <b>Nama:</b> {nama_escaped}\n"
-                        f"🆔 <b>Username:</b> {username_escaped}\n"
-                        f"💬 <b>Keluhan:</b> {keluhan_escaped}\n"
-                        f"⏰ <b>Waktu:</b> {timestamp_escaped}\n\n"
-                        f"Terima kasih! 🙏"
-                    )
-                    
-                    await update.message.reply_text(
-                        status_message,
-                        parse_mode="HTML",
-                        reply_markup=main_menu_keyboard()
-                    )
+                    ticket_data = row
                 break
         
-        if not found or not user_owns_ticket:
+        if found and user_owns_ticket and ticket_data:
+            status = ticket_data.get('Status', 'Tidak diketahui')
+            status_emoji = {
+                'Sedang diproses': '🟡',
+                'Selesai': '✅',
+                'Ditolak': '❌',
+                'Menunggu konfirmasi': '🟠'
+            }.get(status, '⚪')
+            
+            nama_escaped = escape_html(ticket_data.get('Nama', 'Tidak ada'))
+            username_escaped = escape_html(ticket_data.get('Username Website', 'Tidak ada'))
+            keluhan_escaped = escape_html(ticket_data.get('Keluhan', 'Tidak ada'))
+            timestamp_escaped = escape_html(ticket_data.get('Timestamp', 'Tidak ada'))
+            website_escaped = escape_html(ticket_data.get('Nama Website', 'Tidak ada'))
+            
+            status_message = (
+                f"📋 <b>STATUS PENGADUAN</b>\n\n"
+                f"{status_emoji} <b>Status:</b> <b>{status}</b>\n"
+                f"🎫 <b>Ticket ID:</b> <code>{ticket_id}</code>\n"
+                f"🌐 <b>Website:</b> {website_escaped}\n"
+                f"👤 <b>Nama:</b> {nama_escaped}\n"
+                f"🆔 <b>Username:</b> {username_escaped}\n"
+                f"💬 <b>Keluhan:</b> {keluhan_escaped}\n"
+                f"⏰ <b>Waktu:</b> {timestamp_escaped}\n\n"
+                f"Terima kasih! 🙏"
+            )
+            
+            await update.message.reply_text(
+                status_message,
+                parse_mode="HTML",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
             await update.message.reply_text(
                 "❌ <b>Tiket tidak ditemukan.</b>\n\n"
                 "Pastikan:\n"
