@@ -92,7 +92,7 @@ def cancel_keyboard():
 
 # ===== STATE MANAGEMENT =====
 user_states = {}
-user_website_history = {}  # Untuk contoh tiket yang relevan
+user_website_history = {}  # Untuk melacak website yang pernah digunakan user
 
 def get_user_state(user_id):
     """Dapatkan state user dengan default values"""
@@ -130,12 +130,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Memulai pengaduan baru - LANGSUNG MULAI DENGAN NAMA WEBSITE"""
     user_id = update.message.from_user.id
-    
-    # Clear state hanya untuk memulai proses baru
+    clear_user_state(user_id)
     user_state = get_user_state(user_id)
     user_state["mode"] = "pengaduan"
     user_state["step"] = "nama_website"
-    user_state["data"] = {}  # Clear data lama
     
     await update.message.reply_text(
         "📝 <b>Membuat Pengaduan Baru</b>\n\n"
@@ -164,8 +162,7 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         
         if website_code:
-            today = datetime.now(JAKARTA_TZ).strftime("%d%m%Y")
-            example_ticket = f"\n<b>Contoh:</b> <code>{website_code}-{today}-001</code>"
+            example_ticket = f"\n<b>Contoh:</b> <code>{website_code}-31102025-001</code>"
     
     await update.message.reply_text(
         f"🔍 <b>Cek Status Tiket</b>\n\n"
@@ -210,18 +207,19 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle semua pesan text dengan state management yang SIMPLE"""
+    """Handle semua pesan text dengan state management yang lebih baik"""
     user_message = update.message.text.strip()
     user_id = update.message.from_user.id
     
     user_state = get_user_state(user_id)
     logger.info(f"User {user_id} message: {user_message}, state: {user_state}")
     
+    # Handle cancel terlebih dahulu
     if user_message.lower() == "❌ batalkan":
         await handle_cancel(update, context)
         return
     
-    # Handle menu utama - JANGAN interrupt proses yang sedang berjalan
+    # Handle menu utama
     if not user_state["mode"]:
         if user_message == "📝 Buat Pengaduan":
             await handle_buat_pengaduan(update, context)
@@ -236,10 +234,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_menu(update, context)
             return
     
+    # Handle berdasarkan mode
     mode = user_state["mode"]
     step = user_state.get("step", "")
     
-    # Handle berdasarkan mode - TANPA validasi state yang kompleks
     if mode == "pengaduan":
         await handle_pengaduan_flow(update, context, user_message, user_state)
     elif mode == "cek_status" and step == "input_tiket":
@@ -266,7 +264,7 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
                 break
         
         if website_found:
-            # Update website history untuk contoh tiket
+            # Update website history
             update_user_website_history(user_id, website_found)
             
             user_state["data"]["website_name"] = website_found
@@ -354,6 +352,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state["data"]["bukti"] = file_obj.file_path
         
         await update.message.reply_text(
+            "📸 <b>Foto bukti diterima!</b>\n\n"
             "Sedang menyimpan pengaduan...",
             parse_mode="HTML"
         )
@@ -376,18 +375,18 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"Processing new complaint from user {user_id}: {ticket_id}")
     
     try:
-        # Save to Google Sheets
+        # Save to Google Sheets dengan kolom tambahan
         worksheet.append_row([
-            timestamp,
-            ticket_id,
-            data["website_name"],
-            data["nama"],
-            data["username_website"],
-            data["keluhan"],
-            data.get("bukti", "Tidak ada"),
-            data["username_tg"],
-            data["user_id"],
-            "Sedang diproses"
+            timestamp,                           # Timestamp (DD/MM/YYYY HH:MM:SS)
+            ticket_id,                           # Ticket ID (CODE-DDMMYYYY-NOMOR)
+            data["website_name"],                # Nama Website
+            data["nama"],                        # Nama
+            data["username_website"],            # Username Website  
+            data["keluhan"],                     # Keluhan
+            data.get("bukti", "Tidak ada"),      # Bukti
+            data["username_tg"],                 # Username_TG
+            data["user_id"],                     # User_ID
+            "Sedang diproses"                    # Status
         ])
         logger.info(f"✅ Data saved to Google Sheets: {ticket_id}")
     except Exception as e:
@@ -416,7 +415,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=main_menu_keyboard()
     )
 
-    # Notify admin
+    # Notify admin dengan HTML parsing yang lebih aman
     await kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id)
     
     clear_user_state(user_id)
@@ -440,7 +439,7 @@ async def kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp,
     logger.error(f"❌ All notification attempts failed for ticket {ticket_id}")
 
 async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
-    """Send notification to admin"""
+    """Send notification to admin - FIXED VERSION WITH HTML"""
     try:
         # Escape data untuk HTML
         nama_escaped = escape_html(data.get("nama", ""))
@@ -494,7 +493,7 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
         return False
 
 async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_state: dict):
-    """Proses cek status tiket"""
+    """Proses cek status tiket - DIPERBAIKI UNTUK WEBSITE"""
     current_user_id = update.message.from_user.id
     
     try:
@@ -627,13 +626,9 @@ def main():
         application.add_error_handler(error_handler)
         
         logger.info("✅ Complaint Bot starting...")
-        
-        # Gunakan polling dengan parameter yang lebih robust
         application.run_polling(
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            poll_interval=1.0,
-            timeout=30
+            allowed_updates=Update.ALL_TYPES
         )
         
     except Exception as e:
