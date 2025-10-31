@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 # Config
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
-GOOGLE_SHEET_NAME = "Pengaduan Global"  # Ganti nama sheet
+GOOGLE_SHEET_NAME = "Pengaduan Global"
 ADMIN_IDS = [5704050846, 8388423519]
 
 # Timezone Jakarta
 JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 
-# Website configuration
+# Website configuration dengan kode yang FIXED
 WEBSITES = {
     'jokerbola': {'code': 'JB', 'name': 'JokerBola'},
     'nagabola': {'code': 'NB', 'name': 'NagaBola'}, 
@@ -60,7 +60,7 @@ def generate_ticket_number(website_code):
         # Hitung tiket hari ini untuk website tertentu
         count_today = sum(1 for row in all_data 
                          if str(row.get('Ticket ID', '')).startswith(f"{website_code}-{today}")
-                         and row.get('Nama Website') == WEBSITES[website_code.lower()]['name'])
+                         and row.get('Nama Website', '').lower() == WEBSITES.get(website_code.lower(), {}).get('name', '').lower())
         
         return f"{website_code}-{today}-{count_today+1:03d}"
     except Exception as e:
@@ -90,19 +90,6 @@ def cancel_keyboard():
     return ReplyKeyboardMarkup([
         ['❌ Batalkan']
     ], resize_keyboard=True)
-
-def website_selection_keyboard():
-    """Keyboard untuk pemilihan website"""
-    websites_list = list(WEBSITES.keys())
-    keyboard = []
-    
-    # Buat keyboard dengan 2 kolom
-    for i in range(0, len(websites_list), 2):
-        row = websites_list[i:i+2]
-        keyboard.append(row)
-    
-    keyboard.append(['❌ Batalkan'])
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ===== STATE MANAGEMENT =====
 user_states = {}
@@ -137,22 +124,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memulai pengaduan baru dengan pilihan website"""
+    """Memulai pengaduan baru"""
     user_id = update.message.from_user.id
     clear_user_state(user_id)
     user_state = get_user_state(user_id)
     user_state["mode"] = "pengaduan"
-    user_state["step"] = "pilih_website"
+    user_state["step"] = "nama_website"
     
-    website_options = "\n".join([f"• {info['name']} ({code})" for code, info in WEBSITES.items()])
+    website_list = "\n".join([f"• {info['name']}" for info in WEBSITES.values()])
     
     await update.message.reply_text(
         "📝 <b>Membuat Pengaduan Baru</b>\n\n"
-        "Silakan pilih <b>website</b> yang ingin Anda laporkan:\n\n"
-        f"{website_options}\n\n"
+        "Silakan tulis <b>nama website</b> yang ingin Anda laporkan:\n\n"
         "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="HTML",
-        reply_markup=website_selection_keyboard()
+        reply_markup=cancel_keyboard()
     )
 
 async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +152,6 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔍 <b>Cek Status Tiket</b>\n\n"
         "Silakan kirim <b>Nomor Tiket</b> Anda:\n"
-        "Contoh: <code>JB-31122025-001</code>\n\n"
         "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="HTML",
         reply_markup=cancel_keyboard()
@@ -180,7 +165,7 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ℹ️ <b>Bantuan Penggunaan</b>\n\n"
         "📝 <b>Cara Buat Pengaduan:</b>\n"
         "1. Klik '📝 Buat Pengaduan'\n"
-        "2. Pilih website\n"
+        "2. Tulis nama website\n"
         "3. Isi nama lengkap\n"
         "4. Isi username website\n"
         "5. Jelaskan keluhan\n"
@@ -213,24 +198,24 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle semua pesan text dengan state management yang lebih baik"""
-    user_message = update.message.text.strip().lower()
+    user_message = update.message.text.strip()
     user_id = update.message.from_user.id
     
     user_state = get_user_state(user_id)
     logger.info(f"User {user_id} message: {user_message}, state: {user_state}")
     
-    if user_message == "❌ batalkan":
+    if user_message.lower() == "❌ batalkan":
         await handle_cancel(update, context)
         return
     
     if not user_state["mode"]:
-        if user_message == "📝 buat pengaduan":
+        if user_message == "📝 Buat Pengaduan":
             await handle_buat_pengaduan(update, context)
             return
-        elif user_message == "🔍 cek status":
+        elif user_message == "🔍 Cek Status":
             await handle_cek_status(update, context)
             return
-        elif user_message == "ℹ️ bantuan":
+        elif user_message == "ℹ️ Bantuan":
             await handle_bantuan(update, context)
             return
         else:
@@ -253,26 +238,37 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
     """Handle flow pengaduan yang lebih robust"""
     step = user_state.get("step", "")
     
-    if step == "pilih_website":
-        if user_message in WEBSITES:
-            website_info = WEBSITES[user_message]
-            user_state["data"]["website_code"] = user_message
-            user_state["data"]["website_name"] = website_info['name']
+    if step == "nama_website":
+        # Cari website berdasarkan input user (case insensitive)
+        website_found = None
+        website_code = None
+        
+        for key, info in WEBSITES.items():
+            if user_message.lower() in [key.lower(), info['name'].lower()]:
+                website_found = info['name']
+                website_code = info['code']
+                break
+        
+        if website_found:
+            user_state["data"]["website_name"] = website_found
+            user_state["data"]["website_code"] = website_code
             user_state["step"] = "nama"
             
             await update.message.reply_text(
-                f"<b>{website_info['name']}</b>\n\n"
+                f"<b>{website_found}</b>\n\n"
                 "Silakan kirim <b>Nama Lengkap</b> Anda:\n\n"
                 "Ketik ❌ Batalkan untuk membatalkan",
                 parse_mode="HTML",
                 reply_markup=cancel_keyboard()
             )
         else:
+            website_list = "\n".join([f"• {info['name']}" for info in WEBSITES.values()])
             await update.message.reply_text(
-                "❌ <b>Website tidak valid!</b>\n\n"
-                "Silakan pilih website dari menu di bawah:",
+                "❌ <b>Website tidak dikenali!</b>\n\n"
+                f"<b>Website yang didukung:</b>\n{website_list}\n\n"
+                "Silakan tulis kembali nama website:",
                 parse_mode="HTML",
-                reply_markup=website_selection_keyboard()
+                reply_markup=cancel_keyboard()
             )
         
     elif step == "nama":
@@ -358,7 +354,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     data = user_state["data"]
     timestamp = get_jakarta_time()
     website_code = data["website_code"]
-    ticket_id = generate_ticket_number(WEBSITES[website_code]['code'])
+    ticket_id = generate_ticket_number(website_code)
     
     logger.info(f"Processing new complaint from user {user_id}: {ticket_id}")
     
