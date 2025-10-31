@@ -133,7 +133,7 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔍 <b>Cek Status Tiket</b>\n\n"
         "Silakan kirim <b>Nomor Tiket</b> Anda:\n"
-        "Contoh: <code>JB-20251219-001</code>\n\n"
+        "Contoh: <code>JB-20241219-001</code>\n\n"
         "Ketik ❌ Batalkan untuk membatalkan",
         parse_mode="HTML",
         reply_markup=cancel_keyboard()
@@ -418,7 +418,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(
             "❌ <b>Format tiket tidak valid!</b>\n\n"
             "Format: <code>JB-TANGGAL-NOMOR</code>\n"
-            "Contoh: <code>JB-20251219-001</code>\n\n"
+            "Contoh: <code>JB-20241219-001</code>\n\n"
             "Silakan masukkan kembali:",
             parse_mode="HTML",
             reply_markup=cancel_keyboard()
@@ -560,33 +560,4 @@ def main():
         logger.error(f"Fatal error: {e}")
 
 if __name__ == '__main__':
-import threading
-from flask import Flask
-
-# Buat simple HTTP server untuk bind port (opsional)
-def create_health_check():
-    app = Flask(__name__)
-    
-    @app.route('/')
-    def health_check():
-        return {'status': 'ok', 'service': 'telegram-bot'}
-    
-    @app.route('/health')
-    def health():
-        return {'status': 'healthy', 'bot': 'running'}
-    
-    # Run di port yang ditentukan Render
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
-
-def start_health_server():
-    """Start health check server di thread terpisah"""
-    server_thread = threading.Thread(target=create_health_check, daemon=True)
-    server_thread.start()
-
-def main():
-    """Main function"""
-    # Start health check server (optional)
-    start_health_server()
-    
-    # ... rest of your existing main code
+    main()
