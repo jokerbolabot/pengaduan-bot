@@ -51,6 +51,13 @@ def generate_ticket_number():
         logger.error(f"Error generating ticket: {e}")
         return f"JB-{datetime.now(JAKARTA_TZ).strftime('%Y%m%d')}-001"
 
+def escape_markdown(text):
+    """Escape karakter khusus Markdown"""
+    if not text:
+        return ""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in str(text))
+
 def main_menu_keyboard():
     return ReplyKeyboardMarkup([
         ['📝 Buat Pengaduan', '🔍 Cek Status'],
@@ -202,7 +209,6 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["step"] = "username_jb"
         
         await update.message.reply_text(
-            "✅ **Nama tersimpan!**\n\n"
             "🆔 **Masukkan Username / ID JokerBola Anda:**\n\n"
             "Ketik ❌ Batalkan untuk membatalkan",
             parse_mode="Markdown",
@@ -214,7 +220,6 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["step"] = "keluhan"
         
         await update.message.reply_text(
-            "✅ **Username tersimpan!**\n\n"
             "📋 **Jelaskan keluhan Anda:**\n\n"
             "Ketik ❌ Batalkan untuk membatalkan",
             parse_mode="Markdown",
@@ -226,7 +231,6 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["step"] = "bukti"
         
         await update.message.reply_text(
-            "✅ **Keluhan tersimpan!**\n\n"
             "📸 **Kirim foto bukti (opsional)**\n\n"
             "Kirim foto sekarang atau ketik 'lanjut' untuk melanjutkan tanpa bukti.\n\n"
             "Ketik ❌ Batalkan untuk membatalkan",
@@ -263,7 +267,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["bukti"] = file_obj.file_path
         
         await update.message.reply_text(
-            "✅ **Foto bukti diterima!**\n\n"
             "Sedang menyimpan pengaduan...",
             parse_mode="Markdown"
         )
@@ -321,7 +324,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=main_menu_keyboard()
     )
 
-    # Notify admin - FIXED VERSION
+    # Notify admin - FIXED VERSION WITH MARKDOWN ESCAPING
     await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
     
     # Clear user data - BISA BUAT PENGADUAN LAGI
@@ -366,14 +369,20 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                         'Menunggu konfirmasi': '🟠'
                     }.get(status, '⚪')
                     
+                    # Escape data untuk Markdown
+                    nama_escaped = escape_markdown(row.get('Nama', 'Tidak ada'))
+                    username_escaped = escape_markdown(row.get('Username', 'Tidak ada'))
+                    keluhan_escaped = escape_markdown(row.get('Keluhan', 'Tidak ada'))
+                    timestamp_escaped = escape_markdown(row.get('Timestamp', 'Tidak ada'))
+                    
                     status_message = (
                         f"📋 **STATUS PENGADUAN**\n\n"
                         f"{status_emoji} **Status:** **{status}**\n"
                         f"🎫 **Ticket ID:** `{ticket_id}`\n"
-                        f"👤 **Nama:** {row.get('Nama', 'Tidak ada')}\n"
-                        f"🆔 **Username:** {row.get('Username', 'Tidak ada')}\n"
-                        f"💬 **Keluhan:** {row.get('Keluhan', 'Tidak ada')}\n"
-                        f"⏰ **Waktu:** {row.get('Timestamp', 'Tidak ada')}\n\n"
+                        f"👤 **Nama:** {nama_escaped}\n"
+                        f"🆔 **Username:** {username_escaped}\n"
+                        f"💬 **Keluhan:** {keluhan_escaped}\n"
+                        f"⏰ **Waktu:** {timestamp_escaped}\n\n"
                         f"Terima kasih! 🙏"
                     )
                     
@@ -408,26 +417,33 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     context.user_data.clear()
 
 async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
-    """Send notification to admin - FIXED VERSION"""
+    """Send notification to admin - FIXED VERSION WITH MARKDOWN ESCAPING"""
     try:
+        # Escape semua data user untuk menghindari Markdown error
+        nama_escaped = escape_markdown(data.get("nama", ""))
+        username_jb_escaped = escape_markdown(data.get("username_jb", ""))
+        keluhan_escaped = escape_markdown(data.get("keluhan", ""))
+        username_tg_escaped = escape_markdown(data.get("username_tg", ""))
+        user_id_escaped = escape_markdown(data.get("user_id", ""))
+        
         bukti_text = data.get("bukti", "Tidak ada")
         if bukti_text != "Tidak ada" and bukti_text.startswith("http"):
-            bukti_display = f"[Lihat Bukti]({bukti_text})"
+            bukti_display = f"[📎 Lihat Bukti]({bukti_text})"
         else:
-            bukti_display = bukti_text
+            bukti_display = escape_markdown(bukti_text)
         
         message = (
             f"🚨 **PENGADUAN BARU DITERIMA** 🚨\n\n"
             f"🎫 **Ticket ID:** `{ticket_id}`\n"
-            f"⏰ **Waktu:** {timestamp} (WIB)\n\n"
+            f"⏰ **Waktu:** {timestamp} \\(WIB\\)\n\n"
             f"**📋 Data Pelapor:**\n"
-            f"• **Nama:** {data['nama']}\n"
-            f"• **Username JB:** {data['username_jb']}\n"
-            f"• **Telegram:** @{data['username_tg']}\n"
-            f"• **User ID:** `{data['user_id']}`\n\n"
-            f"**📝 Keluhan:**\n{data['keluhan']}\n\n"
+            f"• **Nama:** {nama_escaped}\n"
+            f"• **Username JB:** {username_jb_escaped}\n"
+            f"• **Telegram:** @{username_tg_escaped}\n"
+            f"• **User ID:** `{user_id_escaped}`\n\n"
+            f"**📝 Keluhan:**\n{keluhan_escaped}\n\n"
             f"**📎 Bukti:** {bukti_display}\n\n"
-            f"⚠️ **Segera tindak lanjuti pengaduan ini!**"
+            f"⚠️ **Segera tindak lanjuti pengaduan ini\\!**"
         )
         
         success_count = 0
@@ -436,7 +452,7 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=message,
-                    parse_mode="Markdown",
+                    parse_mode="MarkdownV2",
                     disable_web_page_preview=True
                 )
                 success_count += 1
