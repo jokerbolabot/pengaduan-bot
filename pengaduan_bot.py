@@ -9,115 +9,90 @@ from telegram.ext import (
     filters, ConversationHandler
 )
 
-# --- Setup Logging ---
+# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# --- Konfigurasi ---
+# Config
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_NAME = "Pengaduan JokerBola"
 ADMIN_IDS = [5704050846, 8388423519]
 
-# --- Tahapan Conversation ---
-NAMA, USERNAME, KELUHAN, BUKTI = range(4)
+# Conversation states
+NAMA, USERNAME, KELUHAN, BUKTI, CEK_TIKET = range(5)
 
-# --- Setup Google Sheets ---
-gc = gspread.service_account_from_dict(json.loads(GOOGLE_CREDENTIALS_JSON))
-sh = gc.open(GOOGLE_SHEET_NAME)
-worksheet = sh.sheet1
+# Setup Google Sheets
+try:
+    gc = gspread.service_account_from_dict(json.loads(GOOGLE_CREDENTIALS_JSON))
+    sh = gc.open(GOOGLE_SHEET_NAME)
+    worksheet = sh.sheet1
+    logger.info("✅ Google Sheets connected successfully")
+except Exception as e:
+    logger.error(f"❌ Google Sheets connection failed: {e}")
+    worksheet = None
 
-# --- Fungsi Generate Ticket ID ---
+# Helper functions
 def generate_ticket_number():
     try:
-        # Ambil semua data dari sheet
         all_data = worksheet.get_all_records()
-        
-        # Hitung tiket hari ini
         today = datetime.now().strftime("%Y%m%d")
-        count_today = 0
-        
-        for row in all_data:
-            timestamp = row.get('Timestamp', '')
-            if isinstance(timestamp, str) and timestamp.startswith(datetime.now().strftime("%Y-%m-%d")):
-                count_today += 1
-        
+        count_today = sum(1 for row in all_data if str(row.get('Timestamp', '')).startswith(datetime.now().strftime("%Y-%m-%d")))
         return f"JB-{today}-{count_today+1:03d}"
     except Exception as e:
-        logging.error(f"Error generating ticket: {e}")
+        logger.error(f"Error generating ticket: {e}")
         return f"JB-{datetime.now().strftime('%Y%m%d')}-001"
 
-# --- Utility: Escape MarkdownV2 ---
-def escape_markdown(text: str) -> str:
-    """Escape characters for MarkdownV2"""
-    if not text:
-        return ""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
-
-# --- Menu Keyboard ---
 def main_menu_keyboard():
     return ReplyKeyboardMarkup([
         ['/start', '/cek'],
-        ['/cancel', '/help']
-    ], resize_keyboard=True, one_time_keyboard=True)
+        ['/help']
+    ], resize_keyboard=True)
 
-# --- Webhook Disable ---
-async def disable_webhook(application: Application):
-    """Disable webhook untuk memastikan polling saja"""
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    logging.info("✅ Webhook disabled, using polling only")
-
-# --- Handlers ---
+# ===== PENGADUAN HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memulai proses pengaduan"""
     context.user_data.clear()
     await update.message.reply_text(
-        "👋 Halo\\! Selamat datang di *Layanan Pengaduan JokerBola*\n\n"
-        "Silakan isi data berikut untuk melaporkan keluhan Anda\\.\n\n"
-        "📝 *Nama lengkap:*",
-        parse_mode="MarkdownV2",
+        "👋 Halo! Selamat datang di Layanan Pengaduan JokerBola\n\n"
+        "Silakan isi data berikut untuk melaporkan keluhan Anda.\n\n"
+        "📝 **Nama lengkap:**",
+        parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
     return NAMA
 
 async def nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menerima nama pengguna"""
     context.user_data["nama"] = update.message.text
     context.user_data["user_id"] = update.message.from_user.id
     context.user_data["username_tg"] = update.message.from_user.username or "-"
     
     await update.message.reply_text(
-        "🆔 *Masukkan ID / Username akun JokerBola Anda:*",
-        parse_mode="MarkdownV2"
+        "🆔 **Masukkan ID / Username akun JokerBola Anda:**",
+        parse_mode="Markdown"
     )
     return USERNAME
 
 async def username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menerima username JokerBola"""
     context.user_data["username_jb"] = update.message.text
-    
     await update.message.reply_text(
-        "📋 *Jelaskan keluhan Anda:*",
-        parse_mode="MarkdownV2"
+        "📋 **Jelaskan keluhan Anda:**",
+        parse_mode="Markdown"
     )
     return KELUHAN
 
 async def keluhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menerima keluhan"""
     context.user_data["keluhan"] = update.message.text
-    
     await update.message.reply_text(
-        "📸 *Kirimkan foto bukti \\(opsional\\)*\n\n"
-        "Jika tidak ada bukti, ketik: `skip`",
-        parse_mode="MarkdownV2"
+        "📸 **Kirimkan foto bukti (opsional)**\n\n"
+        "Jika tidak ada bukti, ketik: skip",
+        parse_mode="Markdown"
     )
     return BUKTI
 
 async def bukti(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menerima bukti foto"""
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
         file_obj = await context.bot.get_file(file_id)
@@ -129,247 +104,277 @@ async def bukti(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def skip_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Skip pengiriman bukti"""
     context.user_data["bukti"] = "Tidak ada"
     await selesaikan_pengaduan(update, context)
     return ConversationHandler.END
 
 async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menyelesaikan pengaduan dan menyimpan ke Google Sheets"""
     data = context.user_data
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket_id = generate_ticket_number()
     
-    logging.info(f"🔄 Memproses pengaduan baru: {ticket_id}")
+    logger.info(f"Processing new complaint: {ticket_id}")
     
-    # Escape data untuk Markdown
-    nama_escaped = escape_markdown(data["nama"])
-    username_jb_escaped = escape_markdown(data["username_jb"])
-    keluhan_escaped = escape_markdown(data["keluhan"])
-    
-    # Simpan ke Google Sheets
     try:
+        # Save to Google Sheets
         worksheet.append_row([
-            timestamp,           # Timestamp
-            ticket_id,           # Ticket ID
-            data["nama"],        # Nama
-            data["username_jb"], # Username JokerBola
-            data["keluhan"],     # Keluhan
-            data["bukti"],       # Bukti
-            data["username_tg"], # Username_TG
-            data["user_id"],     # User_ID
-            "Sedang diproses"    # Status
+            timestamp,
+            ticket_id,
+            data["nama"],
+            data["username_jb"],
+            data["keluhan"],
+            data["bukti"],
+            data["username_tg"],
+            data["user_id"],
+            "Sedang diproses"
         ])
-        logging.info(f"✅ Data berhasil disimpan ke Google Sheets: {ticket_id}")
+        logger.info(f"Data saved to Google Sheets: {ticket_id}")
     except Exception as e:
-        logging.error(f"❌ Gagal menyimpan ke Google Sheets: {e}")
+        logger.error(f"Failed to save to Google Sheets: {e}")
         await update.message.reply_text(
-            "❌ Maaf, terjadi gangguan sistem\\. Silakan coba lagi nanti\\.",
-            parse_mode="MarkdownV2",
+            "❌ Maaf, terjadi gangguan sistem. Silakan coba lagi nanti.",
             reply_markup=main_menu_keyboard()
         )
         return
 
-    # Kirim konfirmasi ke user
+    # Confirm to user
     await update.message.reply_text(
-        f"✅ *Terima kasih, {nama_escaped}\\!*\n\n"
-        f"Laporan Anda telah diterima\\.\n\n"
-        f"*Nomor tiket:* `{ticket_id}`\n"
-        f"*Status:* Sedang diproses\n\n"
-        f"Gunakan perintah `/cek {ticket_id}` untuk memantau status laporan Anda\\.",
-        parse_mode="MarkdownV2",
+        f"✅ **Terima kasih, {data['nama']}!**\n\n"
+        f"Laporan Anda telah diterima.\n\n"
+        f"**Nomor tiket:** `{ticket_id}`\n"
+        f"**Status:** Sedang diproses\n\n"
+        f"**Simpan nomor tiket ini untuk pengecekan status!**\n"
+        f"Gunakan perintah /cek untuk memantau status laporan Anda.",
+        parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
-    # Kirim notifikasi ke admin
-    logging.info(f"📤 Mengirim notifikasi ke admin...")
+    # Notify admin
     await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
-    logging.info(f"✅ Proses pengaduan selesai: {ticket_id}")
 
 async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
-    """Mengirim notifikasi ke admin - FIXED VERSION"""
+    """Send notification to admin"""
     try:
-        # Format bukti
-        if data["bukti"] != "Tidak ada" and data["bukti"].startswith("http"):
-            bukti_text = f"[📎 Lihat Bukti]({data['bukti']})"
-        else:
-            bukti_text = "Tidak ada"
+        bukti_text = data["bukti"] if data["bukti"] != "Tidak ada" else "Tidak ada"
         
-        # Escape data untuk MarkdownV2
-        nama_escaped = escape_markdown(data["nama"])
-        username_jb_escaped = escape_markdown(data["username_jb"])
-        keluhan_escaped = escape_markdown(data["keluhan"])
-        username_tg_escaped = escape_markdown(data["username_tg"])
-        
-        # Buat pesan notifikasi
         message = (
-            f"📩 *PENGADUAN BARU*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_id}`\n"
-            f"⏰ *Waktu:* `{timestamp}`\n\n"
-            f"👤 *Nama:* {nama_escaped}\n"
-            f"🆔 *Username JB:* {username_jb_escaped}\n"
-            f"💬 *Keluhan:* {keluhan_escaped}\n"
-            f"📎 *Bukti:* {bukti_text}\n"
-            f"🔗 *Telegram:* @{username_tg_escaped}\n"
-            f"🆔 *User ID:* `{data['user_id']}`"
+            f"📩 **PENGADUAN BARU**\n\n"
+            f"🎫 **Ticket ID:** {ticket_id}\n"
+            f"⏰ **Waktu:** {timestamp}\n\n"
+            f"👤 **Nama:** {data['nama']}\n"
+            f"🆔 **Username JB:** {data['username_jb']}\n"
+            f"💬 **Keluhan:** {data['keluhan']}\n"
+            f"📎 **Bukti:** {bukti_text}\n"
+            f"🔗 **Telegram:** @{data['username_tg']}\n"
+            f"🆔 **User ID:** {data['user_id']}"
         )
         
-        # Kirim ke semua admin
         success_count = 0
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=message,
-                    parse_mode="MarkdownV2",
-                    disable_web_page_preview=True
+                    parse_mode="Markdown"
                 )
                 success_count += 1
-                logging.info(f"✅ Notifikasi terkirim ke admin {admin_id}")
+                logger.info(f"Notification sent to admin {admin_id}")
             except Exception as e:
-                logging.error(f"❌ Gagal kirim notifikasi ke admin {admin_id}: {e}")
+                logger.error(f"Failed to send to admin {admin_id}: {e}")
         
-        logging.info(f"📊 Notifikasi berhasil dikirim ke {success_count}/{len(ADMIN_IDS)} admin")
+        logger.info(f"Notifications sent to {success_count}/{len(ADMIN_IDS)} admins")
         
     except Exception as e:
-        logging.error(f"❌ Error di kirim_notifikasi_admin: {e}")
+        logger.error(f"Error in kirim_notifikasi_admin: {e}")
 
-async def cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cek status tiket"""
-    if not context.args:
-        await update.message.reply_text(
-            "❗ *Format:* `/cek nomor_tiket`\n"
-            "*Contoh:* `/cek JB\\-20241219\\-001`\n\n"
-            "Atau klik menu di bawah untuk memulai pengaduan baru:",
-            parse_mode="MarkdownV2",
-            reply_markup=main_menu_keyboard()
-        )
-        return
+# ===== CEK STATUS HANDLERS =====
+async def cek_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Memulai proses pengecekan tiket"""
+    await update.message.reply_text(
+        "🔍 **Pengecekan Status Tiket**\n\n"
+        "Silakan masukkan **nomor tiket** Anda:\n"
+        "Contoh: `JB-20241219-001`\n\n"
+        "Ketik /cancel untuk membatalkan",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return CEK_TIKET
+
+async def cek_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Memproses pengecekan tiket dengan validasi kepemilikan"""
+    ticket_id = update.message.text.strip()
+    current_user_id = update.message.from_user.id
     
-    ticket_id = context.args[0].strip()
+    # Validasi format tiket
+    if not ticket_id.startswith('JB-'):
+        await update.message.reply_text(
+            "❌ **Format tiket tidak valid!**\n\n"
+            "Format tiket harus: `JB-TANGGAL-NOMOR`\n"
+            "Contoh: `JB-20241219-001`\n\n"
+            "Silakan masukkan kembali nomor tiket Anda:",
+            parse_mode="Markdown"
+        )
+        return CEK_TIKET
     
     try:
         # Cari data di Google Sheets
         all_data = worksheet.get_all_records()
         found = False
+        user_owns_ticket = False
         
         for row in all_data:
             if row.get('Ticket ID') == ticket_id:
                 found = True
-                # Escape data untuk output
-                nama_escaped = escape_markdown(str(row.get('Nama', '')))
-                username_escaped = escape_markdown(str(row.get('Username', '')))
-                keluhan_escaped = escape_markdown(str(row.get('Keluhan', '')))
-                status_escaped = escape_markdown(str(row.get('Status', '')))
-                timestamp_escaped = escape_markdown(str(row.get('Timestamp', '')))
-                
-                status_message = (
-                    f"📋 *STATUS PENGADUAN*\n\n"
-                    f"🎫 *Ticket ID:* `{ticket_id}`\n"
-                    f"👤 *Nama:* {nama_escaped}\n"
-                    f"🆔 *Username:* {username_escaped}\n"
-                    f"💬 *Keluhan:* {keluhan_escaped}\n"
-                    f"⏰ *Waktu:* {timestamp_escaped}\n"
-                    f"📊 *Status:* *{status_escaped}*"
-                )
-                await update.message.reply_text(
-                    status_message,
-                    parse_mode="MarkdownV2",
-                    reply_markup=main_menu_keyboard()
-                )
+                # Cek apakah user ini yang membuat tiket
+                ticket_user_id = row.get('User_ID')
+                if str(ticket_user_id) == str(current_user_id):
+                    user_owns_ticket = True
+                    
+                    # Format status dengan emoji
+                    status = row.get('Status', 'Tidak diketahui')
+                    status_emoji = {
+                        'Sedang diproses': '🟡',
+                        'Selesai': '✅',
+                        'Ditolak': '❌',
+                        'Menunggu konfirmasi': '🟠'
+                    }.get(status, '⚪')
+                    
+                    status_message = (
+                        f"📋 **STATUS PENGADUAN**\n\n"
+                        f"{status_emoji} **Status:** **{status}**\n"
+                        f"🎫 **Ticket ID:** `{ticket_id}`\n"
+                        f"👤 **Nama:** {row.get('Nama', 'Tidak ada')}\n"
+                        f"🆔 **Username:** {row.get('Username', 'Tidak ada')}\n"
+                        f"💬 **Keluhan:** {row.get('Keluhan', 'Tidak ada')}\n"
+                        f"⏰ **Waktu:** {row.get('Timestamp', 'Tidak ada')}\n\n"
+                        f"Terima kasih telah menggunakan layanan kami! 🙏"
+                    )
+                    
+                    await update.message.reply_text(
+                        status_message,
+                        parse_mode="Markdown",
+                        reply_markup=main_menu_keyboard()
+                    )
                 break
         
         if not found:
+            # Tiket tidak ditemukan di database
             await update.message.reply_text(
-                "❌ *Tiket tidak ditemukan*\\.\nPastikan nomor tiket benar\\.",
-                parse_mode="MarkdownV2",
-                reply_markup=main_menu_keyboard()
+                "❌ **Tiket tidak ditemukan.**\n\n"
+                "Pastikan:\n"
+                "• Nomor tiket benar\n"
+                "• Format sesuai: `JB-TANGGAL-NOMOR`\n"
+                "• Tidak ada typo\n\n"
+                "Silakan masukkan kembali nomor tiket Anda:",
+                parse_mode="Markdown"
             )
+            return CEK_TIKET
+        elif found and not user_owns_ticket:
+            # Tiket ditemukan tapi bukan milik user ini
+            await update.message.reply_text(
+                "❌ **Tiket tidak ditemukan.**\n\n"
+                "Pastikan:\n"
+                "• Nomor tiket benar\n"
+                "• Format sesuai: `JB-TANGGAL-NOMOR`\n"
+                "• Tidak ada typo\n\n"
+                "Silakan masukkan kembali nomor tiket Anda:",
+                parse_mode="Markdown"
+            )
+            return CEK_TIKET
             
     except Exception as e:
-        logging.error(f"Error cek status: {e}")
+        logger.error(f"Error checking status: {e}")
         await update.message.reply_text(
-            "❌ *Terjadi error saat mencari tiket*\\. Silakan coba lagi\\.",
-            parse_mode="MarkdownV2",
-            reply_markup=main_menu_keyboard()
+            "❌ **Terjadi error saat mencari tiket.**\n\n"
+            "Silakan coba lagi atau hubungi admin.\n\n"
+            "Masukkan kembali nomor tiket Anda:",
+            parse_mode="Markdown"
         )
+        return CEK_TIKET
+    
+    return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Membatalkan pengaduan"""
-    context.user_data.clear()
+async def cek_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Membatalkan pengecekan tiket"""
     await update.message.reply_text(
-        "❌ Pengaduan dibatalkan\\.\n\n"
-        "Klik /start untuk memulai pengaduan baru\\.",
-        reply_markup=main_menu_keyboard(),
-        parse_mode="MarkdownV2"
+        "❌ Pengecekan tiket dibatalkan.\n\n"
+        "Klik /cek untuk memulai pengecekan lagi.",
+        reply_markup=main_menu_keyboard()
     )
     return ConversationHandler.END
 
-async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan menu ketika user mengirim pesan di luar konteks"""
+# ===== OTHER HANDLERS =====
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text(
-        "🤖 *Selamat datang di Layanan Pengaduan JokerBola*\n\n"
-        "📋 *Menu Perintah:*\n"
-        "└ /start \\- Mulai pengaduan baru\n"
-        "└ /cek \\- Cek status tiket\n"
-        "└ /cancel \\- Batalkan pengaduan\n"
-        "└ /help \\- Bantuan penggunaan\n\n"
-        "Silakan pilih menu di bawah atau ketik perintah yang diinginkan:",
-        parse_mode="MarkdownV2",
+        "❌ Pengaduan dibatalkan.\n\nKlik /start untuk memulai pengaduan baru.",
+        reply_markup=main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🆘 **Bantuan Penggunaan Bot**\n\n"
+        "📝 **Cara membuat pengaduan:**\n"
+        "1. Ketik /start\n"
+        "2. Isi nama lengkap\n"
+        "3. Isi username JokerBola\n"
+        "4. Jelaskan keluhan\n"
+        "5. Kirim bukti (opsional)\n\n"
+        "🔍 **Cek status tiket:**\n"
+        "1. Ketik /cek\n"
+        "2. Masukkan nomor tiket\n"
+        "3. Lihat status pengaduan\n\n"
+        "💡 **Tips:**\n"
+        "• Simpan nomor tiket yang diberikan\n"
+        "• Hanya pemilik tiket yang bisa cek status\n"
+        "• Status update real-time\n\n"
+        "❌ **Batalkan proses:**\n"
+        "/cancel - Batalkan pengaduan/pengecekan",
+        parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan bantuan"""
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🆘 *Bantuan Penggunaan Bot*\n\n"
-        "📝 *Cara membuat pengaduan:*\n"
-        "1\\. Ketik /start\n"
-        "2\\. Isi nama lengkap\n"
-        "3\\. Isi username JokerBola\n"
-        "4\\. Jelaskan keluhan\n"
-        "5\\. Kirim bukti \\(opsional\\)\n\n"
-        "🔍 *Cek status tiket:*\n"
-        "└ /cek JB\\-20241219\\-001\n\n"
-        "❌ *Batalkan pengaduan:*\n"
-        "└ /cancel",
-        parse_mode="MarkdownV2",
+        "🤖 **Selamat datang di Layanan Pengaduan JokerBola**\n\n"
+        "📋 **Menu Perintah:**\n"
+        "• /start - Mulai pengaduan baru\n"
+        "• /cek - Cek status tiket\n"
+        "• /help - Bantuan penggunaan\n\n"
+        "Silakan pilih menu di bawah:",
+        parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle error"""
-    logging.error(f"Error: {context.error}")
+    logger.error(f"Error: {context.error}")
     if update and update.message:
         await update.message.reply_text(
-            "❌ Terjadi error, silakan coba lagi\\.\n\n"
-            "Gunakan menu di bawah untuk melanjutkan:",
-            parse_mode="MarkdownV2",
+            "❌ Terjadi error, silakan coba lagi.",
             reply_markup=main_menu_keyboard()
         )
 
 def main():
-    """Main function"""
-    # Validasi environment variables
+    # Validate environment variables
     if not BOT_TOKEN:
-        logging.error("BOT_TOKEN tidak ditemukan!")
+        logger.error("BOT_TOKEN not found!")
         return
     
     if not GOOGLE_CREDENTIALS_JSON:
-        logging.error("GOOGLE_CREDENTIALS tidak ditemukan!")
+        logger.error("GOOGLE_CREDENTIALS not found!")
+        return
+
+    if not worksheet:
+        logger.error("Google Sheets not connected!")
         return
 
     try:
-        # Build application dengan webhook disabled
-        application = (
-            Application.builder()
-            .token(BOT_TOKEN)
-            .post_init(disable_webhook)
-            .build()
-        )
+        # Build application
+        application = Application.builder().token(BOT_TOKEN).build()
         
-        # Conversation handler
-        conv_handler = ConversationHandler(
+        # Conversation handler untuk PENGADUAN
+        pengaduan_conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
                 NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, nama)],
@@ -382,15 +387,23 @@ def main():
             },
             fallbacks=[CommandHandler('cancel', cancel)],
         )
+        
+        # Conversation handler untuk CEK STATUS
+        cek_conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('cek', cek_start)],
+            states={
+                CEK_TIKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, cek_process)],
+            },
+            fallbacks=[CommandHandler('cancel', cek_cancel)],
+        )
 
         # Add handlers
-        application.add_handler(conv_handler)
-        application.add_handler(CommandHandler('cek', cek_status))
-        application.add_handler(CommandHandler('cancel', cancel))
+        application.add_handler(pengaduan_conv_handler)
+        application.add_handler(cek_conv_handler)
         application.add_handler(CommandHandler('help', help_command))
         application.add_handler(CommandHandler('start', show_menu))
         
-        # Handler untuk pesan di luar konteks - HARUS DIBAWAH CONVERSATION HANDLER
+        # Handler for messages outside conversation
         application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^(skip|Skip|SKIP)$'), 
             show_menu
@@ -400,14 +413,14 @@ def main():
         application.add_error_handler(error_handler)
         
         # Start bot
-        logging.info("✅ Bot berjalan...")
+        logger.info("✅ Bot starting...")
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
         
     except Exception as e:
-        logging.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
 
 if __name__ == '__main__':
     main()
