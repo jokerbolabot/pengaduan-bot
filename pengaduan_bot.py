@@ -49,11 +49,19 @@ def generate_ticket_number():
         logging.error(f"Error generating ticket: {e}")
         return f"JB-{datetime.now().strftime('%Y%m%d')}-001"
 
+# --- Utility: Escape MarkdownV2 ---
+def escape_markdown(text: str) -> str:
+    """Escape characters for MarkdownV2"""
+    if not text:
+        return ""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
+
 # --- Menu Keyboard ---
 def main_menu_keyboard():
     return ReplyKeyboardMarkup([
         ['/start', '/cek'],
-        ['/cancel']
+        ['/cancel', '/help']
     ], resize_keyboard=True, one_time_keyboard=True)
 
 # --- Handlers ---
@@ -61,7 +69,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Memulai proses pengaduan"""
     context.user_data.clear()
     await update.message.reply_text(
-        "👋 Halo! Selamat datang di *Layanan Pengaduan JokerBola*\\\\\.\n\n"
+        "👋 Halo\\! Selamat datang di *Layanan Pengaduan JokerBola*\n\n"
         "Silakan isi data berikut untuk melaporkan keluhan Anda\\.\n\n"
         "📝 *Nama lengkap:*",
         parse_mode="MarkdownV2",
@@ -126,6 +134,11 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket_id = generate_ticket_number()
     
+    # Escape data untuk Markdown
+    nama_escaped = escape_markdown(data["nama"])
+    username_jb_escaped = escape_markdown(data["username_jb"])
+    keluhan_escaped = escape_markdown(data["keluhan"])
+    
     # Simpan ke Google Sheets
     try:
         worksheet.append_row([
@@ -151,7 +164,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Kirim konfirmasi ke user
     await update.message.reply_text(
-        f"✅ *Terima kasih, {data['nama']}\\!*\n\n"
+        f"✅ *Terima kasih, {nama_escaped}\\!*\n\n"
         f"Laporan Anda telah diterima\\.\n\n"
         f"*Nomor tiket:* `{ticket_id}`\n"
         f"*Status:* Sedang diproses\n\n"
@@ -167,15 +180,20 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
     """Mengirim notifikasi ke admin"""
     bukti_text = f"[Lihat Bukti]({data['bukti']})" if data["bukti"] != "Tidak ada" else "Tidak ada"
     
+    # Escape data untuk admin notification
+    nama_escaped = escape_markdown(data["nama"])
+    username_jb_escaped = escape_markdown(data["username_jb"])
+    keluhan_escaped = escape_markdown(data["keluhan"])
+    
     message = (
-        f"📩 *PENGADUAN BARU*\\n\\n"
-        f"🎫 *Ticket ID:* `{ticket_id}`\\n"
-        f"⏰ *Waktu:* {timestamp}\\n\\n"
-        f"👤 *Nama:* {data['nama']}\\n"
-        f"🆔 *Username JB:* {data['username_jb']}\\n"
-        f"💬 *Keluhan:* {data['keluhan']}\\n"
-        f"📎 *Bukti:* {bukti_text}\\n"
-        f"🔗 *Telegram:* @{data['username_tg']}\\n"
+        f"📩 *PENGADUAN BARU*\n\n"
+        f"🎫 *Ticket ID:* `{ticket_id}`\n"
+        f"⏰ *Waktu:* {timestamp}\n\n"
+        f"👤 *Nama:* {nama_escaped}\n"
+        f"🆔 *Username JB:* {username_jb_escaped}\n"
+        f"💬 *Keluhan:* {keluhan_escaped}\n"
+        f"📎 *Bukti:* {bukti_text}\n"
+        f"🔗 *Telegram:* @{data['username_tg']}\n"
         f"🆔 *User ID:* `{data['user_id']}`"
     )
     
@@ -193,7 +211,7 @@ async def cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cek status tiket"""
     if not context.args:
         await update.message.reply_text(
-            "❗ *Format:* `/cek nomor_tiket`\\n"
+            "❗ *Format:* `/cek nomor_tiket`\n"
             "*Contoh:* `/cek JB\\-20241219\\-001`\n\n"
             "Atau klik menu di bawah untuk memulai pengaduan baru:",
             parse_mode="MarkdownV2",
@@ -211,14 +229,21 @@ async def cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for row in all_data:
             if row.get('Ticket ID') == ticket_id:
                 found = True
+                # Escape data untuk output
+                nama_escaped = escape_markdown(str(row.get('Nama', '')))
+                username_escaped = escape_markdown(str(row.get('Username', '')))
+                keluhan_escaped = escape_markdown(str(row.get('Keluhan', '')))
+                status_escaped = escape_markdown(str(row.get('Status', '')))
+                timestamp_escaped = escape_markdown(str(row.get('Timestamp', '')))
+                
                 status_message = (
-                    f"📋 *STATUS PENGADUAN*\\n\\n"
-                    f"🎫 *Ticket ID:* `{ticket_id}`\\n"
-                    f"👤 *Nama:* {row['Nama']}\\n"
-                    f"🆔 *Username:* {row['Username']}\\n"
-                    f"💬 *Keluhan:* {row['Keluhan']}\\n"
-                    f"⏰ *Waktu:* {row['Timestamp']}\\n"
-                    f"📊 *Status:* *{row['Status']}*"
+                    f"📋 *STATUS PENGADUAN*\n\n"
+                    f"🎫 *Ticket ID:* `{ticket_id}`\n"
+                    f"👤 *Nama:* {nama_escaped}\n"
+                    f"🆔 *Username:* {username_escaped}\n"
+                    f"💬 *Keluhan:* {keluhan_escaped}\n"
+                    f"⏰ *Waktu:* {timestamp_escaped}\n"
+                    f"📊 *Status:* *{status_escaped}*"
                 )
                 await update.message.reply_text(
                     status_message,
@@ -256,11 +281,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menampilkan menu ketika user mengirim pesan di luar konteks"""
     await update.message.reply_text(
-        "🤖 *Selamat datang di Layanan Pengaduan JokerBola*\\n\\n"
-        "📋 *Menu Perintah:*\\n"
-        "└ /start \\- Mulai pengaduan baru\\n"
-        "└ /cek \\- Cek status tiket\\n"
-        "└ /cancel \\- Batalkan pengaduan\\n\\n"
+        "🤖 *Selamat datang di Layanan Pengaduan JokerBola*\n\n"
+        "📋 *Menu Perintah:*\n"
+        "└ /start \\- Mulai pengaduan baru\n"
+        "└ /cek \\- Cek status tiket\n"
+        "└ /cancel \\- Batalkan pengaduan\n"
+        "└ /help \\- Bantuan penggunaan\n\n"
         "Silakan pilih menu di bawah atau ketik perintah yang diinginkan:",
         parse_mode="MarkdownV2",
         reply_markup=main_menu_keyboard()
@@ -269,16 +295,16 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menampilkan bantuan"""
     await update.message.reply_text(
-        "🆘 *Bantuan Penggunaan Bot*\\n\\n"
-        "📝 *Cara membuat pengaduan:*\\n"
-        "1\\. Ketik /start\\n"
-        "2\\. Isi nama lengkap\\n"
-        "3\\. Isi username JokerBola\\n"
-        "4\\. Jelaskan keluhan\\n"
-        "5\\. Kirim bukti \\(opsional\\)\\n\\n"
-        "🔍 *Cek status tiket:*\\n"
-        "└ /cek JB\\-20241219\\-001\\n\\n"
-        "❌ *Batalkan pengaduan:*\\n"
+        "🆘 *Bantuan Penggunaan Bot*\n\n"
+        "📝 *Cara membuat pengaduan:*\n"
+        "1\\. Ketik /start\n"
+        "2\\. Isi nama lengkap\n"
+        "3\\. Isi username JokerBola\n"
+        "4\\. Jelaskan keluhan\n"
+        "5\\. Kirim bukti \\(opsional\\)\n\n"
+        "🔍 *Cek status tiket:*\n"
+        "└ /cek JB\\-20241219\\-001\n\n"
+        "❌ *Batalkan pengaduan:*\n"
         "└ /cancel",
         parse_mode="MarkdownV2",
         reply_markup=main_menu_keyboard()
