@@ -2,12 +2,12 @@ import os
 import json
 import gspread
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_NAME = "Pengaduan JokerBola"
-ADMIN_IDS = [5704050846]
+ADMIN_IDS = [5704050846, 8388423519]
 
 # Setup Google Sheet
 gc = gspread.service_account_from_dict(json.loads(GOOGLE_CREDENTIALS_JSON))
@@ -19,51 +19,49 @@ def escape_markdown_v2(text: str) -> str:
     escape_chars = r'\_*[]()~`>#+-=|{}.!'
     return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
 
-def kirim_notif_admin(pesan: str, context: CallbackContext):
+async def kirim_notif_admin(pesan: str, application):
     for admin_id in ADMIN_IDS:
         try:
-            context.bot.send_message(chat_id=admin_id, text=pesan, parse_mode="MarkdownV2")
+            await application.bot.send_message(chat_id=admin_id, text=pesan, parse_mode="MarkdownV2")
         except Exception as e:
             print(f"Gagal kirim ke admin {admin_id}: {e}")
 
-def simpan_ke_sheet(username_tg: str, pesan: str, link_gambar: str):
+async def simpan_ke_sheet(username_tg: str, pesan: str, link_gambar: str):
     username_link = f"t.me/{username_tg}"
     worksheet.append_row([username_link, pesan, link_gambar])
 
 # Handlers
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Bot aktif. Kirim pengaduan atau bukti.", reply_markup=ReplyKeyboardRemove())
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot aktif. Kirim pengaduan atau bukti.", reply_markup=ReplyKeyboardRemove())
 
-def cancel(update: Update, context: CallbackContext):
-    update.message.reply_text("Perintah dibatalkan.", reply_markup=ReplyKeyboardRemove())
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Perintah dibatalkan.", reply_markup=ReplyKeyboardRemove())
 
-def cek(update: Update, context: CallbackContext):
-    update.message.reply_text("Bot online dan siap menerima pengaduan.")
+async def cek(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot online dan siap menerima pengaduan.")
 
-def pengaduan(update: Update, context: CallbackContext):
+async def pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     username = user.username or str(user.id)
     pesan = update.message.text or ""
     
+    link_gambar = "-"
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
-        file_obj = context.bot.get_file(file_id)
+        file_obj = await context.bot.get_file(file_id)
         link_gambar = file_obj.file_path
-    else:
-        link_gambar = "-"
 
     pesan_escaped = escape_markdown_v2(pesan)
-    simpan_ke_sheet(username, pesan_escaped, link_gambar)
+    await simpan_ke_sheet(username, pesan_escaped, link_gambar)
 
     notif = f"📩 *Pengaduan baru*\nUsername: `{escape_markdown_v2(str(username))}`\nPesan: {pesan_escaped}\nLink gambar: {escape_markdown_v2(link_gambar)}"
-    kirim_notif_admin(notif, context)
-    update.message.reply_text("✅ Terima kasih! Pengaduanmu sudah diterima.")
+    await kirim_notif_admin(notif, context.application)
+    await update.message.reply_text("✅ Terima kasih! Pengaduanmu sudah diterima.")
 
-def error_handler(update: Update, context: CallbackContext):
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"Error: {context.error}")
 
 def main():
-    # Pastikan token tersedia
     if not BOT_TOKEN:
         print("ERROR: BOT_TOKEN tidak ditemukan!")
         return
@@ -73,25 +71,21 @@ def main():
         return
 
     try:
-        # Gunakan Updater langsung (cara lama yang lebih stabil)
-        updater = Updater(BOT_TOKEN, use_context=True)
-        dispatcher = updater.dispatcher
+        application = ApplicationBuilder().token(BOT_TOKEN).build()
         
         # Add handlers
-        dispatcher.add_handler(CommandHandler("start", start))
-        dispatcher.add_handler(CommandHandler("cancel", cancel))
-        dispatcher.add_handler(CommandHandler("cek", cek))
-        dispatcher.add_handler(MessageHandler(Filters.text | Filters.photo, pengaduan))
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("cancel", cancel))
+        application.add_handler(CommandHandler("cek", cek))
+        application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, pengaduan))
         
         # Error handler
-        dispatcher.add_error_handler(error_handler)
+        application.add_error_handler(error_handler)
         
         print("✅ Bot berjalan...")
         
-        # Start polling
-        updater.start_polling()
-        print("✅ Bot berhasil start polling...")
-        updater.idle()
+        # Run bot
+        application.run_polling()
         
     except Exception as e:
         print(f"❌ Error starting bot: {e}")
