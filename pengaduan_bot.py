@@ -5,7 +5,7 @@ import logging
 import pytz
 import asyncio
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, MenuButtonCommands, MenuButtonDefault
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ContextTypes,
     filters
@@ -79,10 +79,10 @@ def escape_html(text):
     }
     return ''.join(escape_chars.get(char, char) for char in str(text))
 
-def main_menu_single_row():
-    """Menu satu baris di samping tombol paperclip"""
+def main_menu_keyboard():
     return ReplyKeyboardMarkup([
-        ['📝 Buat Pengaduan', '🔍 Cek Status', 'ℹ️ Bantuan']
+        ['📝 Buat Pengaduan', '🔍 Cek Status'],
+        ['ℹ️ Bantuan']
     ], resize_keyboard=True)
 
 def cancel_keyboard():
@@ -113,9 +113,46 @@ def update_user_website_history(user_id, website_name):
     """Update history website user"""
     user_website_history[user_id] = website_name
 
+# ===== MENU BUTTON HANDLERS =====
+async def setup_menu_button(application: Application):
+    """Setup menu button untuk semua user"""
+    try:
+        await application.bot.set_chat_menu_button(
+            menu_button=MenuButtonCommands()
+        )
+        logger.info("✅ Menu button commands berhasil diatur")
+    except Exception as e:
+        logger.error(f"❌ Gagal mengatur menu button: {e}")
+
+async def remove_menu_button(application: Application):
+    """Hapus menu button (kembali ke default)"""
+    try:
+        await application.bot.set_chat_menu_button(
+            menu_button=MenuButtonDefault()
+        )
+        logger.info("✅ Menu button diatur ke default")
+    except Exception as e:
+        logger.error(f"❌ Gagal menghapus menu button: {e}")
+
+async def set_commands_menu(application: Application):
+    """Set daftar commands yang akan muncul di menu button"""
+    commands = [
+        ("start", "Mulai bot dan tampilkan menu utama"),
+        ("buat_pengaduan", "Buat pengaduan baru"),
+        ("cek_status", "Cek status tiket pengaduan"),
+        ("bantuan", "Tampilkan bantuan penggunaan"),
+        ("cancel", "Batalkan proses saat ini")
+    ]
+    
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("✅ Menu commands berhasil diatur")
+    except Exception as e:
+        logger.error(f"❌ Gagal mengatur menu commands: {e}")
+
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command - reset semua state dan tampilkan menu satu baris"""
+    """Start command - reset semua state dan tampilkan menu"""
     user_id = update.message.from_user.id
     clear_user_state(user_id)
     
@@ -124,7 +161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Kami siap untuk melayani pengaduan anda.\n\n"
         "Silakan pilih menu di bawah:",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,9 +226,11 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 <b>Tips:</b>\n"
         "• Simpan nomor tiket dengan baik\n"
         "• Bisa buat pengaduan berkali-kali\n\n"
-        "❌ <b>Batalkan proses kapan saja</b> dengan klik '❌ Batalkan'",
+        "❌ <b>Batalkan proses kapan saja</b> dengan klik '❌ Batalkan'\n\n"
+        "📱 <b>Menu Button:</b>\n"
+        "Gunakan menu button (☰) di kiri chat untuk akses cepat ke semua perintah!",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,7 +242,7 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❌ <b>Proses dibatalkan</b>\n\n"
         "Kembali ke menu utama.",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,7 +400,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "❌ Foto tidak diperlukan saat ini.",
-            reply_markup=main_menu_single_row()
+            reply_markup=main_menu_keyboard()
         )
 
 async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE, user_state: dict):
@@ -393,7 +432,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"❌ Failed to save to Google Sheets: {e}")
         await update.message.reply_text(
             "❌ Maaf, terjadi gangguan sistem. Silakan coba lagi nanti.",
-            reply_markup=main_menu_single_row()
+            reply_markup=main_menu_keyboard()
         )
         clear_user_state(user_id)
         return
@@ -412,7 +451,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Gunakan menu '🔍 Cek Status' untuk memantau perkembangan pengaduan.\n\n"
         f"<b>🔄 Ingin buat pengaduan lagi?</b> Klik '📝 Buat Pengaduan'",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
     # Notify admin dengan HTML parsing yang lebih aman
@@ -541,7 +580,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text(
                 status_message,
                 parse_mode="HTML",
-                reply_markup=main_menu_single_row()
+                reply_markup=main_menu_keyboard()
             )
         else:
             await update.message.reply_text(
@@ -551,14 +590,14 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 "• Tidak ada typo\n\n"
                 "Klik '🔍 Cek Status' untuk mencoba lagi.",
                 parse_mode="HTML",
-                reply_markup=main_menu_single_row()
+                reply_markup=main_menu_keyboard()
             )
             
     except Exception as e:
         logger.error(f"Error checking status: {e}")
         await update.message.reply_text(
             "❌ Terjadi error. Silakan coba lagi.",
-            reply_markup=main_menu_single_row()
+            reply_markup=main_menu_keyboard()
         )
     
     clear_user_state(current_user_id)
@@ -570,7 +609,7 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Kami siap melayani pengaduan Anda.\n\n"
         "Silakan pilih menu:",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -582,7 +621,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❌ <b>Semua proses dibatalkan</b>\n\n"
         "Kembali ke menu utama.",
         parse_mode="HTML",
-        reply_markup=main_menu_single_row()
+        reply_markup=main_menu_keyboard()
     )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -591,8 +630,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.message:
         await update.message.reply_text(
             "❌ Terjadi error, silakan coba lagi.",
-            reply_markup=main_menu_single_row()
+            reply_markup=main_menu_keyboard()
         )
+
+async def post_init(application: Application):
+    """Setup setelah bot diinisialisasi"""
+    await set_commands_menu(application)
+    await setup_menu_button(application)
 
 def main():
     """Main function"""
@@ -609,11 +653,14 @@ def main():
         return
 
     try:
-        application = Application.builder().token(BOT_TOKEN).build()
+        application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
         
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("cancel", cancel_command))
         application.add_handler(CommandHandler("help", handle_bantuan))
+        application.add_handler(CommandHandler("buat_pengaduan", handle_buat_pengaduan))
+        application.add_handler(CommandHandler("cek_status", handle_cek_status))
+        application.add_handler(CommandHandler("bantuan", handle_bantuan))
         
         application.add_handler(MessageHandler(filters.Text(["📝 Buat Pengaduan"]), handle_buat_pengaduan))
         application.add_handler(MessageHandler(filters.Text(["🔍 Cek Status"]), handle_cek_status))
