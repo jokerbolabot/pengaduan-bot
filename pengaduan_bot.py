@@ -79,10 +79,17 @@ def escape_html(text):
     }
     return ''.join(escape_chars.get(char, char) for char in str(text))
 
+def menu_toggle_keyboard():
+    """Keyboard dengan toggle MENU"""
+    return ReplyKeyboardMarkup([
+        ['📋 MENU']
+    ], resize_keyboard=True)
+
 def main_menu_keyboard():
+    """Keyboard menu utama"""
     return ReplyKeyboardMarkup([
         ['📝 Buat Pengaduan', '🔍 Cek Status'],
-        ['ℹ️ Bantuan']
+        ['ℹ️ Bantuan', '❌ Batalkan']
     ], resize_keyboard=True)
 
 def cancel_keyboard():
@@ -115,13 +122,25 @@ def update_user_website_history(user_id, website_name):
 
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command - reset semua state dan tampilkan menu"""
+    """Start command - reset semua state dan tampilkan menu toggle"""
     user_id = update.message.from_user.id
     clear_user_state(user_id)
     
     await update.message.reply_text(
         "🤖 <b>Selamat datang di Layanan Pengaduan</b>\n\n"
         "Kami siap untuk melayani pengaduan anda.\n\n"
+        "Klik <b>📋 MENU</b> untuk membuka menu utama.",
+        parse_mode="HTML",
+        reply_markup=menu_toggle_keyboard()
+    )
+
+async def handle_menu_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle ketika user menekan tombol MENU"""
+    user_id = update.message.from_user.id
+    clear_user_state(user_id)
+    
+    await update.message.reply_text(
+        "📋 <b>MENU UTAMA</b>\n\n"
         "Silakan pilih menu di bawah:",
         parse_mode="HTML",
         reply_markup=main_menu_keyboard()
@@ -189,9 +208,10 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 <b>Tips:</b>\n"
         "• Simpan nomor tiket dengan baik\n"
         "• Bisa buat pengaduan berkali-kali\n\n"
-        "❌ <b>Batalkan proses kapan saja</b> dengan klik '❌ Batalkan'",
+        "❌ <b>Batalkan proses kapan saja</b> dengan klik '❌ Batalkan'\n\n"
+        "📋 <b>Kembali ke Menu Utama:</b> Klik '📋 MENU'",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
+        reply_markup=menu_toggle_keyboard()
     )
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,9 +221,9 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "❌ <b>Proses dibatalkan</b>\n\n"
-        "Kembali ke menu utama.",
+        "Klik <b>📋 MENU</b> untuk membuka menu utama.",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
+        reply_markup=menu_toggle_keyboard()
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -213,6 +233,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_state = get_user_state(user_id)
     logger.info(f"User {user_id} message: {user_message}, state: {user_state}")
+    
+    # Handle menu toggle terlebih dahulu
+    if user_message == "📋 MENU":
+        await handle_menu_toggle(update, context)
+        return
     
     # Handle cancel terlebih dahulu
     if user_message.lower() == "❌ batalkan":
@@ -231,7 +256,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_bantuan(update, context)
             return
         else:
-            await show_menu(update, context)
+            await show_menu_toggle(update, context)
             return
     
     # Handle berdasarkan mode
@@ -245,7 +270,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.warning(f"Unknown state for user {user_id}: {user_state}")
         clear_user_state(user_id)
-        await show_menu(update, context)
+        await show_menu_toggle(update, context)
 
 async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_state: dict):
     """Handle flow pengaduan yang lebih robust"""
@@ -361,7 +386,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "❌ Foto tidak diperlukan saat ini.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=menu_toggle_keyboard()
         )
 
 async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE, user_state: dict):
@@ -393,7 +418,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"❌ Failed to save to Google Sheets: {e}")
         await update.message.reply_text(
             "❌ Maaf, terjadi gangguan sistem. Silakan coba lagi nanti.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=menu_toggle_keyboard()
         )
         clear_user_state(user_id)
         return
@@ -410,9 +435,9 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         f"• <b>Waktu:</b> {timestamp}\n\n"
         f"<b>💡 Simpan nomor tiket ini!</b>\n"
         f"Gunakan menu '🔍 Cek Status' untuk memantau perkembangan pengaduan.\n\n"
-        f"<b>🔄 Ingin buat pengaduan lagi?</b> Klik '📝 Buat Pengaduan'",
+        f"<b>🔄 Ingin buat pengaduan lagi?</b> Klik <b>📋 MENU</b>",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
+        reply_markup=menu_toggle_keyboard()
     )
 
     # Notify admin dengan HTML parsing yang lebih aman
@@ -541,7 +566,7 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text(
                 status_message,
                 parse_mode="HTML",
-                reply_markup=main_menu_keyboard()
+                reply_markup=menu_toggle_keyboard()
             )
         else:
             await update.message.reply_text(
@@ -549,28 +574,26 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 "Pastikan:\n"
                 "• Nomor tiket benar\n"
                 "• Tidak ada typo\n\n"
-                "Klik '🔍 Cek Status' untuk mencoba lagi.",
+                "Klik <b>📋 MENU</b> untuk membuka menu utama.",
                 parse_mode="HTML",
-                reply_markup=main_menu_keyboard()
+                reply_markup=menu_toggle_keyboard()
             )
             
     except Exception as e:
         logger.error(f"Error checking status: {e}")
         await update.message.reply_text(
             "❌ Terjadi error. Silakan coba lagi.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=menu_toggle_keyboard()
         )
     
     clear_user_state(current_user_id)
 
-async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tampilkan menu utama"""
+async def show_menu_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan menu toggle"""
     await update.message.reply_text(
-        "🤖 <b>Layanan Pengaduan</b>\n\n"
-        "Kami siap melayani pengaduan Anda.\n\n"
-        "Silakan pilih menu:",
+        "Klik <b>📋 MENU</b> untuk membuka menu utama.",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
+        reply_markup=menu_toggle_keyboard()
     )
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -580,9 +603,9 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "❌ <b>Semua proses dibatalkan</b>\n\n"
-        "Kembali ke menu utama.",
+        "Klik <b>📋 MENU</b> untuk membuka menu utama.",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
+        reply_markup=menu_toggle_keyboard()
     )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -591,7 +614,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.message:
         await update.message.reply_text(
             "❌ Terjadi error, silakan coba lagi.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=menu_toggle_keyboard()
         )
 
 def main():
@@ -615,6 +638,10 @@ def main():
         application.add_handler(CommandHandler("cancel", cancel_command))
         application.add_handler(CommandHandler("help", handle_bantuan))
         
+        # Handler untuk menu toggle
+        application.add_handler(MessageHandler(filters.Text(["📋 MENU"]), handle_menu_toggle))
+        
+        # Handler untuk menu utama
         application.add_handler(MessageHandler(filters.Text(["📝 Buat Pengaduan"]), handle_buat_pengaduan))
         application.add_handler(MessageHandler(filters.Text(["🔍 Cek Status"]), handle_cek_status))
         application.add_handler(MessageHandler(filters.Text(["ℹ️ Bantuan"]), handle_bantuan))
