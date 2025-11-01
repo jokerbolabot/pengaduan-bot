@@ -115,23 +115,38 @@ def escape_html(text):
     }
     return ''.join(escape_chars.get(char, char) for char in str(text))
 
-# ===== STATE MANAGEMENT =====
+# ===== STATE MANAGEMENT YANG DIPERBAIKI =====
 user_states = {}
+user_locks = {}  # Lock untuk setiap user
+
+def get_user_lock(user_id):
+    """Dapatkan lock untuk user tertentu"""
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+    return user_locks[user_id]
 
 def get_user_state(user_id):
-    """Dapatkan state user dengan default values"""
+    """Dapatkan state user dengan default values - THREAD SAFE"""
     if user_id not in user_states:
         user_states[user_id] = {
             "mode": None,
             "step": None,
-            "data": {}
+            "data": {},
+            "last_activity": datetime.now()
         }
     return user_states[user_id]
 
 def clear_user_state(user_id):
-    """Clear state user"""
+    """Clear state user - THREAD SAFE"""
     if user_id in user_states:
         del user_states[user_id]
+    if user_id in user_locks:
+        del user_locks[user_id]
+
+def update_user_activity(user_id):
+    """Update waktu aktivitas terakhir user"""
+    if user_id in user_states:
+        user_states[user_id]["last_activity"] = datetime.now()
 
 # ===== MENU BUTTON HANDLERS =====
 async def setup_menu_button(application: Application):
@@ -164,7 +179,12 @@ async def set_commands_menu(application: Application):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command - reset semua state dan tampilkan menu"""
     user_id = update.message.from_user.id
-    clear_user_state(user_id)
+    
+    async with get_user_lock(user_id):
+        clear_user_state(user_id)
+        user_state = get_user_state(user_id)
+        user_state["mode"] = "menu"
+        update_user_activity(user_id)
     
     welcome_text = (
         "🎉 <b>Selamat datang di Layanan Pengaduan Customer Service!</b>\n\n"
@@ -181,10 +201,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Memulai pengaduan baru - VALIDASI WEBSITE INPUT"""
     user_id = update.message.from_user.id
-    clear_user_state(user_id)
-    user_state = get_user_state(user_id)
-    user_state["mode"] = "pengaduan"
-    user_state["step"] = "nama_website"
+    
+    async with get_user_lock(user_id):
+        clear_user_state(user_id)
+        user_state = get_user_state(user_id)
+        user_state["mode"] = "pengaduan"
+        user_state["step"] = "nama_website"
+        update_user_activity(user_id)
     
     await update.message.reply_text(
         "📝 <b>Membuat Pengaduan Baru</b>\n\n"
@@ -195,12 +218,15 @@ async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cek status tiket"""
+    """Cek status tiket - DIPISAHKAN DARI STATE PENGADUAN"""
     user_id = update.message.from_user.id
-    clear_user_state(user_id)
-    user_state = get_user_state(user_id)
-    user_state["mode"] = "cek_status"
-    user_state["step"] = "input_tiket"
+    
+    async with get_user_lock(user_id):
+        clear_user_state(user_id)
+        user_state = get_user_state(user_id)
+        user_state["mode"] = "cek_status"
+        user_state["step"] = "input_tiket"
+        update_user_activity(user_id)
     
     await update.message.reply_text(
         "🔍 <b>Cek Status Tiket Pengaduan</b>\n\n"
@@ -213,6 +239,10 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menu bantuan"""
+    user_id = update.message.from_user.id
+    async with get_user_lock(user_id):
+        update_user_activity(user_id)
+    
     help_text = (
         "🆘 <b>Pusat Bantuan Customer Service</b>\n\n"
         
@@ -247,7 +277,12 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle cancel dari command atau tombol"""
     user_id = update.message.from_user.id
-    clear_user_state(user_id)
+    
+    async with get_user_lock(user_id):
+        clear_user_state(user_id)
+        user_state = get_user_state(user_id)
+        user_state["mode"] = "menu"
+        update_user_activity(user_id)
     
     await update.message.reply_text(
         "❌ <b>Proses dibatalkan</b>\n\n"
@@ -258,14 +293,11 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle semua pesan text dengan state management"""
+    """Handle semua pesan text dengan state management yang DIPERBAIKI"""
     user_message = update.message.text.strip()
     user_id = update.message.from_user.id
     
-    user_state = get_user_state(user_id)
-    logger.info(f"User {user_id} message: {user_message}, state: {user_state}")
-    
-    # Handle tombol navigasi utama
+    # Handle tombol navigasi utama - TANPA LOCK (hanya read)
     if user_message in ["📝 Buat Pengaduan Baru", "/buat_pengaduan"]:
         await handle_buat_pengaduan(update, context)
         return
@@ -279,28 +311,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_cancel(update, context)
         return
     
-    # Handle tombol konfirmasi bukti
-    if user_message in ["📸 Kirim Foto Bukti", "⏩ Lewati Tanpa Foto"]:
-        await handle_bukti_selection(update, context, user_message)
-        return
+    # Dapatkan state user dengan lock
+    async with get_user_lock(user_id):
+        user_state = get_user_state(user_id)
+        mode = user_state.get("mode")
+        step = user_state.get("step")
+        update_user_activity(user_id)
     
-    # Handle berdasarkan state
-    mode = user_state["mode"]
-    step = user_state.get("step", "")
+    logger.info(f"User {user_id} message: {user_message}, mode: {mode}, step: {step}")
     
+    # Handle berdasarkan mode dengan lock yang sesuai
     if mode == "pengaduan":
-        await handle_pengaduan_flow(update, context, user_message, user_state)
+        await handle_pengaduan_flow(update, context, user_message, user_id)
     elif mode == "cek_status" and step == "input_tiket":
-        await proses_cek_status(update, context, user_message, user_state)
+        await proses_cek_status(update, context, user_message, user_id)
     else:
-        logger.warning(f"Unknown state for user {user_id}: {user_state}")
-        clear_user_state(user_id)
+        logger.warning(f"Unknown state for user {user_id}: mode={mode}, step={step}")
+        async with get_user_lock(user_id):
+            clear_user_state(user_id)
         await show_menu(update, context)
 
 async def handle_bukti_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, selection: str):
     """Handle pemilihan opsi bukti"""
     user_id = update.message.from_user.id
-    user_state = get_user_state(user_id)
+    
+    async with get_user_lock(user_id):
+        user_state = get_user_state(user_id)
+        update_user_activity(user_id)
     
     if selection == "📸 Kirim Foto Bukti":
         await update.message.reply_text(
@@ -310,13 +347,16 @@ async def handle_bukti_selection(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=get_cancel_only_keyboard()
         )
     elif selection == "⏩ Lewati Tanpa Foto":
-        user_state["data"]["bukti"] = "Tidak ada bukti foto"
-        await selesaikan_pengaduan(update, context, user_state)
+        async with get_user_lock(user_id):
+            user_state["data"]["bukti"] = "Tidak ada bukti foto"
+        await selesaikan_pengaduan(update, context, user_id)
 
-async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_state: dict):
-    """Handle flow pengaduan - DENGAN VALIDASI WEBSITE"""
-    step = user_state.get("step", "")
-    user_id = update.message.from_user.id
+async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_id: int):
+    """Handle flow pengaduan - DENGAN LOCK MANAGEMENT"""
+    async with get_user_lock(user_id):
+        user_state = get_user_state(user_id)
+        step = user_state.get("step", "")
+        update_user_activity(user_id)
     
     if step == "nama_website":
         # VALIDASI INPUT WEBSITE
@@ -324,9 +364,11 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         
         if website_name and website_code:
             # Website valid, lanjutkan
-            user_state["data"]["website_name"] = website_name
-            user_state["data"]["website_code"] = website_code
-            user_state["step"] = "nama"
+            async with get_user_lock(user_id):
+                user_state["data"]["website_name"] = website_name
+                user_state["data"]["website_code"] = website_code
+                user_state["step"] = "nama"
+                update_user_activity(user_id)
             
             await update.message.reply_text(
                 f"<b>{website_name}</b>\n\n"
@@ -346,10 +388,12 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
             )
         
     elif step == "nama":
-        user_state["data"]["nama"] = user_message
-        user_state["data"]["user_id"] = update.message.from_user.id
-        user_state["data"]["username_tg"] = update.message.from_user.username or "-"
-        user_state["step"] = "username_website"
+        async with get_user_lock(user_id):
+            user_state["data"]["nama"] = user_message
+            user_state["data"]["user_id"] = update.message.from_user.id
+            user_state["data"]["username_tg"] = update.message.from_user.username or "-"
+            user_state["step"] = "username_website"
+            update_user_activity(user_id)
         
         website_name = user_state["data"]["website_name"]
         
@@ -361,8 +405,10 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif step == "username_website":
-        user_state["data"]["username_website"] = user_message
-        user_state["step"] = "keluhan"
+        async with get_user_lock(user_id):
+            user_state["data"]["username_website"] = user_message
+            user_state["step"] = "keluhan"
+            update_user_activity(user_id)
         
         await update.message.reply_text(
             "📋 <b>Jelaskan keluhan Anda secara detail:</b>\n\n"
@@ -372,8 +418,10 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif step == "keluhan":
-        user_state["data"]["keluhan"] = user_message
-        user_state["step"] = "bukti"
+        async with get_user_lock(user_id):
+            user_state["data"]["keluhan"] = user_message
+            user_state["step"] = "bukti"
+            update_user_activity(user_id)
         
         await update.message.reply_text(
             "📸 <b>Bukti Pendukung (Opsional)</b>\n\n"
@@ -388,15 +436,20 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo untuk bukti"""
     user_id = update.message.from_user.id
-    user_state = get_user_state(user_id)
     
-    mode = user_state.get("mode")
-    step = user_state.get("step")
+    async with get_user_lock(user_id):
+        user_state = get_user_state(user_id)
+        mode = user_state.get("mode")
+        step = user_state.get("step")
+        update_user_activity(user_id)
     
     if mode == "pengaduan" and step == "bukti":
         file_id = update.message.photo[-1].file_id
         file_obj = await context.bot.get_file(file_id)
-        user_state["data"]["bukti"] = file_obj.file_path
+        
+        async with get_user_lock(user_id):
+            user_state["data"]["bukti"] = file_obj.file_path
+            update_user_activity(user_id)
         
         await update.message.reply_text(
             "✅ <b>Foto bukti berhasil diterima!</b>\n\n"
@@ -405,17 +458,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardRemove()
         )
         
-        await selesaikan_pengaduan(update, context, user_state)
+        await selesaikan_pengaduan(update, context, user_id)
     else:
         await update.message.reply_text(
             "❌ Foto tidak diperlukan saat ini.\n\nSilakan pilih menu yang sesuai:",
             reply_markup=get_main_menu_keyboard()
         )
 
-async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE, user_state: dict):
+async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Selesaikan pengaduan dan simpan ke Google Sheets"""
-    user_id = update.message.from_user.id
-    data = user_state["data"]
+    async with get_user_lock(user_id):
+        user_state = get_user_state(user_id)
+        data = user_state["data"].copy()  # Copy data untuk menghindari race condition
+        update_user_activity(user_id)
+    
     timestamp = get_jakarta_time()
     
     # Generate ticket number berdasarkan kode website yang valid
@@ -445,7 +501,8 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
             "❌ Maaf, terjadi gangguan sistem. Silakan coba lagi nanti.\n\nSilakan pilih menu:",
             reply_markup=get_main_menu_keyboard()
         )
-        clear_user_state(user_id)
+        async with get_user_lock(user_id):
+            clear_user_state(user_id)
         return
 
     # Success message
@@ -472,7 +529,8 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     # Notify admin
     await kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id)
     
-    clear_user_state(user_id)
+    async with get_user_lock(user_id):
+        clear_user_state(user_id)
 
 async def kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id, retry_count=3):
     """Kirim notifikasi ke admin dengan retry mechanism"""
@@ -546,9 +604,9 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
         logger.error(f"❌ Error in kirim_notifikasi_admin: {e}")
         return False
 
-async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_state: dict):
-    """Proses cek status tiket"""
-    current_user_id = update.message.from_user.id
+async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_id: int):
+    """Proses cek status tiket - TERPISAH DARI STATE PENGADUAN"""
+    current_user_id = user_id
     
     try:
         all_data = worksheet.get_all_records()
@@ -617,7 +675,8 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             reply_markup=get_main_menu_keyboard()
         )
     
-    clear_user_state(current_user_id)
+    async with get_user_lock(current_user_id):
+        clear_user_state(current_user_id)
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Tampilkan menu utama"""
@@ -678,7 +737,7 @@ def main():
         
         application.add_error_handler(error_handler)
         
-        logger.info("✅ Validated Complaint Bot starting...")
+        logger.info("✅ Thread-Safe Complaint Bot starting...")
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
