@@ -175,6 +175,12 @@ async def set_commands_menu(application: Application):
     except Exception as e:
         logger.error(f"❌ Gagal mengatur menu commands: {e}")
 
+# ===== POST INIT FUNCTION =====
+async def post_init(application: Application):
+    """Setup setelah bot diinisialisasi"""
+    await set_commands_menu(application)
+    await setup_menu_button(application)
+
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command - reset semua state dan tampilkan menu"""
@@ -594,7 +600,77 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         clear_user_state(user_id)
         logger.info(f"Pengaduan completed and state cleared for user {user_id}")
 
-# ... (fungsi lainnya tetap sama seperti sebelumnya)
+async def kirim_notifikasi_admin_with_retry(context, data, ticket_id, timestamp, user_id, retry_count=3):
+    """Kirim notifikasi ke admin dengan retry mechanism"""
+    for attempt in range(retry_count):
+        try:
+            success = await kirim_notifikasi_admin(context, data, ticket_id, timestamp)
+            if success:
+                logger.info(f"✅ Notifications sent successfully for ticket {ticket_id}")
+                return
+            else:
+                logger.warning(f"⚠️ Some notifications failed for ticket {ticket_id}, attempt {attempt + 1}")
+        except Exception as e:
+            logger.error(f"❌ Error sending notifications for ticket {ticket_id}, attempt {attempt + 1}: {e}")
+        
+        if attempt < retry_count - 1:
+            await asyncio.sleep(2)
+    
+    logger.error(f"❌ All notification attempts failed for ticket {ticket_id}")
+
+async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
+    """Send notification to admin"""
+    try:
+        # Escape data untuk HTML
+        nama_escaped = escape_html(data.get("nama", ""))
+        username_website_escaped = escape_html(data.get("username_website", ""))
+        keluhan_escaped = escape_html(data.get("keluhan", ""))
+        username_tg_escaped = escape_html(data.get("username_tg", ""))
+        user_id_escaped = escape_html(data.get("user_id", ""))
+        website_escaped = escape_html(data.get("website_name", ""))
+        
+        bukti_text = data.get("bukti", "Tidak ada bukti foto")
+        if bukti_text != "Tidak ada bukti foto" and bukti_text.startswith("http"):
+            bukti_display = f'<a href="{bukti_text}">📎 Lihat Bukti</a>'
+        else:
+            bukti_display = escape_html(bukti_text)
+        
+        # Buat message untuk admin
+        message = (
+            f"🚨 <b>PENGADUAN BARU DITERIMA</b> 🚨\n\n"
+            f"🎫 <b>Ticket ID:</b> <code>{ticket_id}</code>\n"
+            f"🌐 <b>Website:</b> {website_escaped}\n"
+            f"⏰ <b>Waktu:</b> {timestamp} (WIB)\n\n"
+            f"<b>📋 Data Pelapor:</b>\n"
+            f"• <b>Nama:</b> {nama_escaped}\n"
+            f"• <b>Username Website:</b> {username_website_escaped}\n"
+            f"• <b>Telegram:</b> @{username_tg_escaped}\n"
+            f"• <b>User ID:</b> <code>{user_id_escaped}</code>\n\n"
+            f"<b>📝 Keluhan:</b>\n{keluhan_escaped}\n\n"
+            f"<b>📎 Bukti:</b> {bukti_display}\n\n"
+            f"⚠️ <b>Segera tindak lanjuti pengaduan ini!</b>"
+        )
+        
+        success_count = 0
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=message,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                success_count += 1
+                logger.info(f"✅ Notification sent to admin {admin_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send to admin {admin_id}: {e}")
+        
+        logger.info(f"📊 Notifications sent to {success_count}/{len(ADMIN_IDS)} admins")
+        return success_count > 0
+        
+    except Exception as e:
+        logger.error(f"❌ Error in kirim_notifikasi_admin: {e}")
+        return False
 
 async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, user_id: int):
     """Proses cek status tiket - TERPISAH DARI STATE PENGADUAN"""
@@ -670,7 +746,28 @@ async def proses_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     async with get_user_lock(current_user_id):
         clear_user_state(current_user_id)
 
-# ... (fungsi lainnya tetap sama)
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan menu utama"""
+    await update.message.reply_text(
+        "🤖 <b>Layanan Pengaduan Customer Service</b>\n\n"
+        "Kami siap membantu masalah Anda.\n\n"
+        "👇 <b>Silakan pilih menu:</b>",
+        parse_mode="HTML",
+        reply_markup=get_main_menu_keyboard()
+    )
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel command"""
+    await handle_cancel(update, context)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle error"""
+    logger.error(f"Error: {context.error}")
+    if update and update.message:
+        await update.message.reply_text(
+            "❌ Terjadi error, silakan coba lagi.\n\nSilakan pilih menu:",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 def main():
     """Main function"""
