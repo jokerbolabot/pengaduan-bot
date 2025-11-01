@@ -27,7 +27,7 @@ ADMIN_IDS = [5704050846, 8388423519]
 # Timezone Jakarta
 JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 
-# Website configuration untuk referensi internal saja (tidak ditampilkan ke user)
+# Website configuration - HANYA INI YANG DITERIMA
 WEBSITES = {
     'jokerbola': {'code': 'JB', 'name': 'JokerBola'},
     'nagabola': {'code': 'NB', 'name': 'NagaBola'}, 
@@ -73,18 +73,11 @@ def get_jakarta_time():
     """Dapatkan waktu Jakarta sekarang"""
     return datetime.now(JAKARTA_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
-def generate_ticket_number(website_input):
-    """Generate ticket number berdasarkan input website customer"""
+def generate_ticket_number(website_code):
+    """Generate ticket number berdasarkan kode website"""
     try:
         all_data = worksheet.get_all_records()
         today = datetime.now(JAKARTA_TZ).strftime("%d%m%Y")  # DDMMYYYY
-        
-        # Cek apakah website input cocok dengan yang kita kenali
-        website_code = "OTH"  # Default untuk website lain
-        for key, info in WEBSITES.items():
-            if key.lower() in website_input.lower() or info['name'].lower() in website_input.lower():
-                website_code = info['code']
-                break
         
         # Hitung tiket hari ini untuk website tertentu
         count_today = sum(1 for row in all_data 
@@ -93,7 +86,21 @@ def generate_ticket_number(website_input):
         return f"{website_code}-{today}-{count_today+1:03d}"
     except Exception as e:
         logger.error(f"Error generating ticket: {e}")
-        return f"OTH-{datetime.now(JAKARTA_TZ).strftime('%d%m%Y')}-001"
+        return f"{website_code}-{datetime.now(JAKARTA_TZ).strftime('%d%m%Y')}-001"
+
+def validate_website_input(user_input):
+    """Validasi input website customer - HARUS SESUAI KRITERIA"""
+    user_input_lower = user_input.lower().strip()
+    
+    # Cek apakah input user cocok dengan website yang ada
+    for key, info in WEBSITES.items():
+        if (key in user_input_lower or 
+            info['name'].lower() in user_input_lower or
+            user_input_lower in key or 
+            user_input_lower in info['name'].lower()):
+            return info['name'], info['code']
+    
+    return None, None
 
 def escape_html(text):
     """Escape karakter khusus HTML"""
@@ -161,12 +168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_text = (
         "🎉 <b>Selamat datang di Layanan Pengaduan Customer Service!</b>\n\n"
-        "Kami siap membantu menyelesaikan masalah Anda di <b>berbagai platform dan website</b>.\n\n"
-        "🚀 <b>Layanan kami mencakup:</b>\n"
-        "• Website gaming & betting\n"
-        "• Platform online lainnya\n"
-        "• Masalah akun & transaksi\n"
-        "• Layanan customer support\n\n"
+        "Kami siap membantu menyelesaikan masalah Anda.\n\n"
         "👇 <b>Silakan pilih menu di bawah:</b>"
     )
     
@@ -177,7 +179,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memulai pengaduan baru - CUSTOMER INPUT WEBSITE BEBAS"""
+    """Memulai pengaduan baru - VALIDASI WEBSITE INPUT"""
     user_id = update.message.from_user.id
     clear_user_state(user_id)
     user_state = get_user_state(user_id)
@@ -186,12 +188,7 @@ async def handle_buat_pengaduan(update: Update, context: ContextTypes.DEFAULT_TY
     
     await update.message.reply_text(
         "📝 <b>Membuat Pengaduan Baru</b>\n\n"
-        "Silakan tulis <b>nama website/platform</b> tempat Anda mengalami masalah:\n\n"
-        "💡 <b>Contoh:</b>\n"
-        "• JokerBola123\n"
-        "• NagaBola88\n" 
-        "• MacanBola\n"
-        "• Atau website lainnya...\n\n"
+        "Silakan tulis <b>nama website</b> tempat Anda mengalami masalah:\n\n"
         "✍️ <b>Tulis nama website:</b>",
         parse_mode="HTML",
         reply_markup=get_cancel_only_keyboard()
@@ -208,8 +205,7 @@ async def handle_cek_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔍 <b>Cek Status Tiket Pengaduan</b>\n\n"
         "Silakan masukkan <b>Nomor Tiket</b> yang Anda terima:\n\n"
-        "🎫 <b>Format tiket:</b> <code>KODE-TANGGAL-NOMOR</code>\n"
-        "💡 <b>Contoh:</b> <code>JB-31102025-001</code>\n\n"
+        "🎫 <b>Format tiket:</b> <code>KODE-TANGGAL-NOMOR</code>\n\n"
         "✍️ <b>Ketik nomor tiket Anda:</b>",
         parse_mode="HTML",
         reply_markup=get_cancel_only_keyboard()
@@ -234,9 +230,8 @@ async def handle_bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Lihat status terbaru pengaduan\n\n"
         
         "💡 <b>INFORMASI PENTING:</b>\n"
-        "• Layanan untuk <b>berbagai website/platform</b>\n"
         "• Proses cepat & profesional\n"
-        "• Tim support siap membantu 24/7\n"
+        "• Tim support siap membantu\n"
         "• Simpan nomor tiket dengan baik\n\n"
         
         "❓ <b>MASIH BINGUNG?</b>\n"
@@ -310,11 +305,6 @@ async def handle_bukti_selection(update: Update, context: ContextTypes.DEFAULT_T
     if selection == "📸 Kirim Foto Bukti":
         await update.message.reply_text(
             "📸 <b>Silakan kirim foto bukti sekarang:</b>\n\n"
-            "Anda dapat mengirim:\n"
-            "• Screenshot error\n"
-            "• Foto transaksi\n" 
-            "• Bukti percakapan\n"
-            "• Atau bukti lainnya\n\n"
             "📎 <b>Unggah foto dari galeri Anda...</b>",
             parse_mode="HTML",
             reply_markup=get_cancel_only_keyboard()
@@ -324,22 +314,36 @@ async def handle_bukti_selection(update: Update, context: ContextTypes.DEFAULT_T
         await selesaikan_pengaduan(update, context, user_state)
 
 async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_message: str, user_state: dict):
-    """Handle flow pengaduan - WEBSITE DARI INPUT CUSTOMER"""
+    """Handle flow pengaduan - DENGAN VALIDASI WEBSITE"""
     step = user_state.get("step", "")
     user_id = update.message.from_user.id
     
     if step == "nama_website":
-        # Simpan input website dari customer (bebas)
-        user_state["data"]["website_input"] = user_message
-        user_state["step"] = "nama"
+        # VALIDASI INPUT WEBSITE
+        website_name, website_code = validate_website_input(user_message)
         
-        await update.message.reply_text(
-            f"✅ <b>Website tercatat: {escape_html(user_message)}</b>\n\n"
-            "Silakan kirim <b>Nama Lengkap</b> Anda:\n\n"
-            "✍️ <b>Ketik nama lengkap:</b>",
-            parse_mode="HTML",
-            reply_markup=get_cancel_only_keyboard()
-        )
+        if website_name and website_code:
+            # Website valid, lanjutkan
+            user_state["data"]["website_name"] = website_name
+            user_state["data"]["website_code"] = website_code
+            user_state["step"] = "nama"
+            
+            await update.message.reply_text(
+                f"<b>{website_name}</b>\n\n"
+                "Silakan kirim <b>Nama Lengkap</b> Anda:\n\n"
+                "✍️ <b>Ketik nama lengkap:</b>",
+                parse_mode="HTML",
+                reply_markup=get_cancel_only_keyboard()
+            )
+        else:
+            # Website tidak valid, minta input ulang
+            await update.message.reply_text(
+                "❌ <b>Website tidak valid!</b>\n\n"
+                "Silakan tulis <b>nama website</b> yang sesuai:\n\n"
+                "✍️ <b>Tulis nama website yang benar:</b>",
+                parse_mode="HTML",
+                reply_markup=get_cancel_only_keyboard()
+            )
         
     elif step == "nama":
         user_state["data"]["nama"] = user_message
@@ -347,10 +351,10 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         user_state["data"]["username_tg"] = update.message.from_user.username or "-"
         user_state["step"] = "username_website"
         
-        website_input = user_state["data"]["website_input"]
+        website_name = user_state["data"]["website_name"]
         
         await update.message.reply_text(
-            f"🆔 <b>Masukkan Username / ID Anda di {escape_html(website_input)}:</b>\n\n"
+            f"🆔 <b>Masukkan Username / ID Anda di {website_name}:</b>\n\n"
             "✍️ <b>Ketik username atau ID Anda:</b>",
             parse_mode="HTML",
             reply_markup=get_cancel_only_keyboard()
@@ -362,11 +366,6 @@ async def handle_pengaduan_flow(update: Update, context: ContextTypes.DEFAULT_TY
         
         await update.message.reply_text(
             "📋 <b>Jelaskan keluhan Anda secara detail:</b>\n\n"
-            "💬 <b>Contoh yang baik:</b>\n"
-            "• Kapan masalah terjadi?\n"
-            "• Error message apa yang muncul?\n"
-            "• Sudah coba apa untuk memperbaiki?\n"
-            "• Transaksi tertahan/tidak masuk?\n\n"
             "✍️ <b>Ketik penjelasan keluhan:</b>",
             parse_mode="HTML",
             reply_markup=get_cancel_only_keyboard()
@@ -419,9 +418,9 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
     data = user_state["data"]
     timestamp = get_jakarta_time()
     
-    # Generate ticket number berdasarkan input website customer
-    website_input = data["website_input"]
-    ticket_id = generate_ticket_number(website_input)
+    # Generate ticket number berdasarkan kode website yang valid
+    website_code = data["website_code"]
+    ticket_id = generate_ticket_number(website_code)
     
     logger.info(f"Processing new complaint from user {user_id}: {ticket_id}")
     
@@ -430,7 +429,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         worksheet.append_row([
             timestamp,                           # Timestamp
             ticket_id,                           # Ticket ID
-            data["website_input"],               # Website Input (dari customer)
+            data["website_name"],                # Website Name (yang sudah divalidasi)
             data["nama"],                        # Nama
             data["username_website"],            # Username Website  
             data["keluhan"],                     # Keluhan
@@ -454,7 +453,7 @@ async def selesaikan_pengaduan(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🎉 <b>PENGADUAN BERHASIL DICATAT!</b>\n\n"
         f"✅ <b>Terima kasih, {escape_html(data['nama'])}!</b>\n\n"
         f"📋 <b>DETAIL PENGADUAN:</b>\n"
-        f"• 🌐 <b>Website:</b> {escape_html(data['website_input'])}\n"
+        f"• 🌐 <b>Website:</b> {data['website_name']}\n"
         f"• 🎫 <b>Nomor Tiket:</b> <code>{ticket_id}</code>\n"
         f"• 📊 <b>Status:</b> Sedang diproses\n"
         f"• ⏰ <b>Waktu:</b> {timestamp}\n\n"
@@ -502,7 +501,7 @@ async def kirim_notifikasi_admin(context, data, ticket_id, timestamp):
         keluhan_escaped = escape_html(data.get("keluhan", ""))
         username_tg_escaped = escape_html(data.get("username_tg", ""))
         user_id_escaped = escape_html(data.get("user_id", ""))
-        website_escaped = escape_html(data.get("website_input", ""))
+        website_escaped = escape_html(data.get("website_name", ""))
         
         bukti_text = data.get("bukti", "Tidak ada bukti foto")
         if bukti_text != "Tidak ada bukti foto" and bukti_text.startswith("http"):
@@ -624,7 +623,7 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Tampilkan menu utama"""
     await update.message.reply_text(
         "🤖 <b>Layanan Pengaduan Customer Service</b>\n\n"
-        "Kami siap membantu masalah Anda di berbagai website & platform.\n\n"
+        "Kami siap membantu masalah Anda.\n\n"
         "👇 <b>Silakan pilih menu:</b>",
         parse_mode="HTML",
         reply_markup=get_main_menu_keyboard()
@@ -679,7 +678,7 @@ def main():
         
         application.add_error_handler(error_handler)
         
-        logger.info("✅ Universal Complaint Bot starting...")
+        logger.info("✅ Validated Complaint Bot starting...")
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
